@@ -1,0 +1,9 @@
+# Changes here will be overwritten by Copier. Do not edit manually.
+_commit: v0.2.5
+_src_path: gh:jlevy/simple-modern-uv
+package_author_email: steven.hosper@nelen-schuurmans.nl
+package_author_name: StevenHosper
+package_description: A helper package to easily access the BROSTAR API
+package_github_org: StevenHosper
+package_module: brostar_api_requests
+package_name: brostar-api-requests
