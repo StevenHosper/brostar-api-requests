@@ -1,8 +1,10 @@
 import logging
+import os
 from typing import Literal
 
 import polars as pl
 import requests
+from dotenv import load_dotenv
 
 from .connection import BROSTARConnection
 from .formatter import PayloadFormatter
@@ -11,6 +13,8 @@ from .upload_models import GMWConstruction, UploadTask, UploadTaskMetadata
 logger = logging.getLogger(__name__)
 RequestTypeOptions = Literal["registration", "replace", "insert", "move", "delete"]
 RegistrationTypeOptions = Literal["GMW_Construction"]
+
+load_dotenv()
 
 
 def move_gmw(
@@ -32,7 +36,9 @@ def move_gmw(
 
 
 def bulk_move_request(excel_file: str) -> None:
-    brostar = BROSTARConnection("")  # BROSTAR API Key
+    # Access your API key
+    brostar_api_key = os.getenv("BROSTAR_API_KEY")
+    brostar = BROSTARConnection(brostar_api_key)  # BROSTAR API Key
     brostar.set_website(production=True)
 
     df = pl.read_excel(excel_file, has_header=True)
@@ -58,10 +64,11 @@ def main():
 
 
 def process_result(result: dict) -> None:
+    lizard_api_key = os.getenv("LIZARD_API_KEY")
     lizard_s = requests.Session()
     lizard_s.headers = {
         "username": "__key__",
-        "password": "",  # Lizard API Key
+        "password": lizard_api_key,  # Lizard API Key
         "Content-Type": "application/json",
     }
 

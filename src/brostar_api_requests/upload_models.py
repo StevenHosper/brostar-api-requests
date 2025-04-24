@@ -8,6 +8,7 @@ from pydantic import BaseModel, root_validator, validator
 
 
 # Upload task metadata
+# noqa: N815 - Using mixedCase to match API requirements
 class UploadTaskMetadata(BaseModel):
     requestReference: str
     deliveryAccountableParty: str | None = None
@@ -16,6 +17,7 @@ class UploadTaskMetadata(BaseModel):
     correctionReason: str | None = None
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GARBulkUploadMetadata(BaseModel):
     requestReference: str
     qualityRegime: str
@@ -27,6 +29,7 @@ class GARBulkUploadMetadata(BaseModel):
     samplingOperator: str | int | None = None
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GLDBulkUploadMetadata(BaseModel):
     requestReference: str
     qualityRegime: str
@@ -34,6 +37,7 @@ class GLDBulkUploadMetadata(BaseModel):
     broId: str
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMNBulkUploadMetadata(BaseModel):
     requestReference: str
     qualityRegime: str
@@ -41,6 +45,7 @@ class GMNBulkUploadMetadata(BaseModel):
     broId: str
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GLDBulkUploadSourcedocumentData(BaseModel):
     validationStatus: str | None = None
     investigatorKvk: str
@@ -55,12 +60,14 @@ class GLDBulkUploadSourcedocumentData(BaseModel):
 
 
 # GMN sourcedocs_data
+# noqa: N815 - Using mixedCase to match API requirements
 class MeasuringPoint(BaseModel):
     measuringPointCode: str
     broId: str
     tubeNumber: str | int
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMNStartregistration(BaseModel):
     objectIdAccountableParty: str
     name: str
@@ -71,6 +78,7 @@ class GMNStartregistration(BaseModel):
     measuringPoints: list[MeasuringPoint]
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMNMeasuringPoint(BaseModel):
     eventDate: str
     measuringPointCode: str
@@ -78,6 +86,7 @@ class GMNMeasuringPoint(BaseModel):
     tubeNumber: str | int
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMNMeasuringPointEndDate(BaseModel):
     eventDate: str | None = None
     yearMonth: str | None = None
@@ -88,6 +97,7 @@ class GMNMeasuringPointEndDate(BaseModel):
     tubeNumber: str | int
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMNTubeReference(BaseModel):
     eventDate: str
     measuringPointCode: str
@@ -95,11 +105,13 @@ class GMNTubeReference(BaseModel):
     tubeNumber: str | int
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMNClosure(BaseModel):
     endDateMonitoring: str
 
 
 # GMW sourcedocs_data
+# noqa: N815 - Using mixedCase to match API requirements
 class Electrode(BaseModel):
     electrodeNumber: str | int
     electrodePackingMaterial: str
@@ -107,11 +119,13 @@ class Electrode(BaseModel):
     electrodePosition: str | float
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GeoOhmCable(BaseModel):
     cableNumber: str | int
     electrodes: list[Electrode]
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class MonitoringTube(BaseModel):
     tubeNumber: str | int
     tubeType: str
@@ -134,6 +148,7 @@ class MonitoringTube(BaseModel):
     geoOhmCables: list[GeoOhmCable] | None = None
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMWConstruction(BaseModel):
     objectIdAccountableParty: str
     deliveryContext: str
@@ -157,14 +172,17 @@ class GMWConstruction(BaseModel):
     dateToBeCorrected: str | date | None = None
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMWEvent(BaseModel):
     eventDate: str
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMWElectrodeStatus(GMWEvent):
     electrodes: list[Electrode]
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMWGroundLevel(GMWEvent):
     wellStability: str = "stabielNAP"
     groundLevelStable: str = "nee"
@@ -172,11 +190,13 @@ class GMWGroundLevel(GMWEvent):
     groundLevelPositioningMethod: str
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMWGroundLevelMeasuring(GMWEvent):
     groundLevelPosition: str | float
     groundLevelPositioningMethod: str
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMWInsertion(GMWEvent):
     tubeNumber: str | int
     tubeTopPosition: str | float
@@ -186,6 +206,7 @@ class GMWInsertion(GMWEvent):
     insertedPartMaterial: str | float
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class MonitoringTubeLengthening(BaseModel):
     tubeNumber: str | int
     variableDiameter: str = "ja"
@@ -197,11 +218,13 @@ class MonitoringTubeLengthening(BaseModel):
     plainTubePartLength: str | float
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMWLengthening(GMWEvent):
     wellHeadProtector: str | None = None
     monitoringTubes: list[MonitoringTubeLengthening]
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMWMaintainer(GMWEvent):
     maintenanceResponsibleParty: str
 
@@ -210,12 +233,14 @@ class GMWOwner(GMWEvent):
     owner: str
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class MonitoringTubePositions(BaseModel):
     tubeNumber: str | int
     tubeTopPosition: str | float
     tubeTopPositioningMethod: str
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMWPositions(GMWEvent):
     wellStability: str = "nee"
     groundLevelStable: str = "instabiel"
@@ -224,6 +249,7 @@ class GMWPositions(GMWEvent):
     monitoringTubes: list[MonitoringTubePositions]
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMWPositionsMeasuring(GMWEvent):
     monitoringTubes: list[MonitoringTubePositions]
     groundLevelPosition: str | float | None = None
@@ -234,11 +260,13 @@ class GMWRemoval(GMWEvent):
     pass
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMWShift(GMWEvent):
     groundLevelPosition: str | float
     groundLevelPositioningMethod: str
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class MonitoringTubeShortening(BaseModel):
     tubeNumber: str | int
     tubeTopPosition: str | float
@@ -246,25 +274,30 @@ class MonitoringTubeShortening(BaseModel):
     plainTubePartLength: str | float
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMWShortening(GMWEvent):
     wellHeadProtector: str | None = None
     monitoringTubes: list[MonitoringTubeShortening]
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class MonitoringTubeStatus(BaseModel):
     tubeNumber: str | int
     tubeStatus: str
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMWTubeStatus(GMWEvent):
     monitoringTubes: list[MonitoringTubeStatus]
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GMWWellHeadProtector(GMWEvent):
     wellHeadProtector: str
 
 
 # GAR sourcedocs_data
+# noqa: N815 - Using mixedCase to match API requirements
 class FieldMeasurement(BaseModel):
     parameter: str | int
     unit: str
@@ -272,6 +305,7 @@ class FieldMeasurement(BaseModel):
     qualityControlStatus: str
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class FieldResearch(BaseModel):
     samplingDateTime: str | datetime
     samplingOperator: str | None = None
@@ -299,6 +333,7 @@ class FieldResearch(BaseModel):
         return value
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class Analysis(BaseModel):
     parameter: str | int
     unit: str
@@ -308,6 +343,7 @@ class Analysis(BaseModel):
     qualityControlStatus: str
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class AnalysisProcess(BaseModel):
     date: str | date
     analyticalTechnique: str
@@ -322,11 +358,13 @@ class AnalysisProcess(BaseModel):
         return value
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class LaboratoryAnalysis(BaseModel):
     responsibleLaboratoryKvk: str | None = None
     analysisProcesses: list[AnalysisProcess] = []
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GAR(BaseModel):
     objectIdAccountableParty: str
     qualityControlMethod: str
@@ -338,6 +376,7 @@ class GAR(BaseModel):
 
 
 # GLD
+# noqa: N815 - Using mixedCase to match API requirements
 class GLDStartregistration(BaseModel):
     objectIdAccountableParty: str | None = None
     groundwaterMonitoringNets: list[str] | None = None
@@ -345,6 +384,7 @@ class GLDStartregistration(BaseModel):
     tubeNumber: str | int
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class TimeValuePair(BaseModel):
     time: str | datetime
     value: float | str | None = None
@@ -360,6 +400,7 @@ class TimeValuePair(BaseModel):
         return value
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class GLDAddition(BaseModel):
     date: str | None = None
     observationId: str | None = None
@@ -413,6 +454,7 @@ class GLDAddition(BaseModel):
 
 
 # FRD
+# noqa: N815 - Using mixedCase to match API requirements
 class FRDStartRegistration(BaseModel):
     objectIdAccountableParty: str | None = None
     groundwaterMonitoringNets: list[str] | None = None
@@ -420,6 +462,7 @@ class FRDStartRegistration(BaseModel):
     tubeNumber: str | int
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class MeasurementConfiguration(BaseModel):
     measurementConfigurationID: str
     measurementE1CableNumber: str | int
@@ -432,10 +475,12 @@ class MeasurementConfiguration(BaseModel):
     currentE2ElectrodeNumber: str | int
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class FRDGemMeasurementConfiguration(BaseModel):
     measurementConfigurations: list[MeasurementConfiguration]
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class FRDEmmInstrumentConfiguration(BaseModel):
     instrumentConfigurationID: str
     relativePositionTransmitterCoil: str | int
@@ -447,6 +492,7 @@ class FRDEmmInstrumentConfiguration(BaseModel):
     instrumentLength: str | int
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class FRDEmmMeasurement(BaseModel):
     measurementDate: date | str
     measurementOperatorKvk: str
@@ -467,6 +513,7 @@ class GemMeasurement(BaseModel):
     configuration: str
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class RelatedCalculatedApparentFormationResistance(BaseModel):
     calculationOperatorKvk: str
     evaluationProcedure: str
@@ -474,6 +521,7 @@ class RelatedCalculatedApparentFormationResistance(BaseModel):
     values: str
 
 
+# noqa: N815 - Using mixedCase to match API requirements
 class FRDGemMeasurement(BaseModel):
     measurementDate: str | date
     measurementOperatorKvk: str

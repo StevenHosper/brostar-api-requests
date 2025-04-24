@@ -36,6 +36,9 @@ BroRequest = Literal["registration", "replace", "insert", "move", "delete"]
 
 class BROSTARConnection:
     def __init__(self, token: str):
+        if not isinstance(token, str):
+            raise ValueError("Token must be a string.")
+
         # Session
         self.website = "https://staging.brostar.nl/api"
         self.s = requests.Session()

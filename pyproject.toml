@@ -41,6 +41,7 @@ dependencies = [
     "polars>=1.27.1",
     "fastexcel>=0.13.0",
     "pydantic>=2.11.3",
+    "dotenv>=0.9.9",
 ]
 
 
