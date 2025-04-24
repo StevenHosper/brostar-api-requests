@@ -13,13 +13,13 @@ jobs:
       contents: read
     steps:
       - name: Checkout (official GitHub action)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           # Important for versioning plugins:
           fetch-depth: 0
 
       - name: Install uv (official Astral action)
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
           version: "0.6.5"
           enable-cache: true
@@ -33,9 +33,9 @@ jobs:
 
       - name: Run tests
         run: uv run pytest
-        
+
       - name: Build package
         run: uv build
 
       - name: Publish to PyPI (using uv)
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc

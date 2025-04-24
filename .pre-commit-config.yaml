@@ -1,0 +1,39 @@
+default_language_version:
+  python: python3
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Ruff version.
+    rev: v0.9.4
+    hooks:
+      # Run the linter.
+      - id: ruff
+        args: ["--fix"]
+      # Run the formatter.
+      - id: ruff-format
+
+# Codespell: Find and fix common spelling errors in code/comments
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.2.6  # You can update this to the latest release if needed
+    hooks:
+      - id: codespell
+        args: ["--write-changes"]
+        additional_dependencies: []  # Optional if you want to pin spell files
+
+  # BasedPyright: Fast type checker (Pyright fork)
+  - repo: local
+    hooks:
+      - id: basedpyright
+        name: basedpyright
+        entry: basedpyright
+        language: system  # assumes basedpyright is installed in your environment
+        types: [python]
+        pass_filenames: false  # basedpyright reads paths from pyproject.toml or CLI
+        stages: [manual]
