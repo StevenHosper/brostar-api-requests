@@ -76,58 +76,47 @@ class BROSTARConnection:
         logger.info("Authentication set.")
 
     def get(self, endpoint: BrostarEndpoint, params: dict | None = None) -> requests.Response:
-        r = self.s.get(url=f"{self.website}/{endpoint}/", params=params, timeout=15)
-        r.raise_for_status()
-        return r
+        print(self.s.auth.username, self.s.auth.password)
+        return self.s.get(url=f"{self.website}/{endpoint}/", params=params, timeout=15)
 
     def get_detail(self, endpoint: BrostarEndpoint, uuid: str) -> requests.Response:
-        r = self.s.get(url=f"{self.website}/{endpoint}/{uuid}", timeout=15)
-        r.raise_for_status()
-        return r
+        return self.s.get(url=f"{self.website}/{endpoint}/{uuid}", timeout=15)
 
     def post_upload(self, payload: dict[str, str], is_json: bool = True) -> requests.Response:
+        print(payload)
         if is_json:
-            r = self.s.post(url=f"{self.website}/uploadtasks/", json=payload, timeout=15)
-        else:
-            r = self.s.post(url=f"{self.website}/uploadtasks/", data=payload, timeout=15)
-        r.raise_for_status()
-        return r
+            return self.s.post(url=f"{self.website}/uploadtasks/", json=payload, timeout=15)
+        return self.s.post(url=f"{self.website}/uploadtasks/", data=payload, timeout=15)
 
     def post_gar_bulk(
         self, payload: dict[str, str], fieldwork_file: BinaryIO, lab_file: BinaryIO
     ) -> requests.Response:
-        r = self.s.post(
+        return self.s.post(
             url=f"{self.website}/bulkuploads/",
             data=payload,
             files={"fieldwork_file": fieldwork_file, "lab_file": lab_file},
             timeout=60,
         )
-        r.raise_for_status()
-        return r
 
     def post_gmn_bulk(
         self, payload: dict[str, str], measuring_point_file: BinaryIO
     ) -> requests.Response:
-        r = self.s.post(
+        return self.s.post(
             url=f"{self.website}/bulkuploads/",
             data=payload,
             files={"measurement_tvp_file": measuring_point_file},
             timeout=30,
         )
-        r.raise_for_status()
-        return r
 
     def post_gld_bulk(
         self, payload: dict[str, str], timeseries_file: BinaryIO
     ) -> requests.Response:
-        r = self.s.post(
+        return self.s.post(
             url=f"{self.website}/bulkuploads/",
             data=payload,
             files={"measurement_tvp_file": timeseries_file},
             timeout=60,
         )
-        r.raise_for_status()
-        return r
 
     def await_bro_id(self, uuid: str) -> str | None:
         """
@@ -160,14 +149,18 @@ class BROSTARConnection:
         status = r.json().get("status", "PENDING")
         while status != "COMPLETED" and timer < 45:
             time.sleep(3)
-            r = self.s.get(url=f"{self.website}/uploadtasks/{uuid}/", timeout=15)
-            r.raise_for_status()
+            try:
+                r = self.s.get(url=f"{self.website}/uploadtasks/{uuid}/", timeout=15)
+                r.raise_for_status()
+            except requests.exceptions.HTTPError as e:
+                logger.exception(f"Error while checking status: {e}")
+                timer += 3
+                continue
+
             status = r.json().get("status", "PENDING")
             timer += 3
 
         return r
 
     def check_status(self, uuid: str) -> requests.Response:
-        r = self.s.post(url=f"{self.website}/uploadtasks/{uuid}/check_status/", timeout=15)
-        r.raise_for_status()
-        return r
+        return self.s.post(url=f"{self.website}/uploadtasks/{uuid}/check_status/", timeout=15)
