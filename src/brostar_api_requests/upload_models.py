@@ -1,7 +1,8 @@
 import uuid
 from datetime import date, datetime
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, root_validator, validator
+from pydantic import BaseModel, root_validator, validator
 
 
 def to_camel(string: str) -> str:
@@ -9,23 +10,17 @@ def to_camel(string: str) -> str:
     return parts[0] + "".join(word.capitalize() for word in parts[1:])
 
 
-## Basemodel
 class CamelModel(BaseModel):
     class Config:
         allow_population_by_field_name = True
 
-    def __init_subclass__(cls, **kwargs):
-        for field_name, _ in cls.__annotations__.items():
-            if not hasattr(cls, field_name):
-                # Only auto-alias fields that include underscores
-                if "_" in field_name:
-                    alias = to_camel(field_name)
-                    setattr(cls, field_name, Field(..., alias=alias))
-        super().__init_subclass__(**kwargs)
+        # Ensure aliasing works for all fields with underscores
+        @staticmethod
+        def alias_generator(field_name: str) -> str:
+            return to_camel(field_name)
 
 
 ## Uploadtask models
-# Upload task metadata
 class UploadTaskMetadata(CamelModel):
     request_reference: str
     delivery_accountable_party: str | None
@@ -40,7 +35,7 @@ class GARBulkUploadMetadata(CamelModel):
     delivery_accountable_party: str | None
     quality_control_method: str | None
     groundwater_monitoring_nets: list[str] | None
-    sampling_operator: str | int | None
+    sampling_operator: int | None
 
 
 class GLDBulkUploadMetadata(CamelModel):
@@ -74,7 +69,7 @@ class GLDBulkUploadSourcedocumentData(CamelModel):
 class MeasuringPoint(CamelModel):
     measuring_point_code: str
     bro_id: str
-    tube_number: str | int
+    tube_number: int
 
 
 class GMNStartregistration(CamelModel):
@@ -91,7 +86,7 @@ class GMNMeasuringPoint(CamelModel):
     event_date: str
     measuring_point_code: str
     bro_id: str
-    tube_number: str | int
+    tube_number: int
 
 
 class GMNMeasuringPointEndDate(CamelModel):
@@ -101,14 +96,14 @@ class GMNMeasuringPointEndDate(CamelModel):
     void_reason: str | None
     measuring_point_code: str
     bro_id: str
-    tube_number: str | int
+    tube_number: int
 
 
 class GMNTubeReference(CamelModel):
     event_date: str
     measuring_point_code: str
     bro_id: str
-    tube_number: str | int
+    tube_number: int
 
 
 class GMNClosure(CamelModel):
@@ -117,36 +112,36 @@ class GMNClosure(CamelModel):
 
 # GMW sourcedocs_data
 class Electrode(CamelModel):
-    electrode_number: str | int
+    electrode_number: int
     electrode_packing_material: str
     electrode_status: str
-    electrode_position: str | float | None
+    electrode_position: float | None
 
 
 class GeoOhmCable(CamelModel):
-    cable_number: str | int
+    cable_number: int
     electrodes: list[Electrode] | None
 
 
 class MonitoringTube(CamelModel):
-    tube_number: str | int
+    tube_number: int
     tube_type: str
     artesian_well_cap_present: str
     sediment_sump_present: str
-    number_of_geo_ohm_cables: str | int | None = None  # This can be static or derived
-    tube_top_diameter: str | float | None = None
-    variable_diameter: str | float
+    number_of_geo_ohm_cables: int = 0
+    tube_top_diameter: int | None = None
+    variable_diameter: str | None = None
     tube_status: str
-    tube_top_position: str | float
+    tube_top_position: float
     tube_top_positioning_method: str
     tube_packing_material: str
     tube_material: str
     glue: str
-    screen_length: str | float
+    screen_length: float
     screen_protection: str | None = None
     sock_material: str
-    plain_tube_part_length: str | float
-    sediment_sump_length: str | float | None = None
+    plain_tube_part_length: float
+    sediment_sump_length: float | None = None
     geo_ohm_cables: list[GeoOhmCable] | None = None
 
 
@@ -155,7 +150,7 @@ class GMWConstruction(CamelModel):
     delivery_context: str
     construction_standard: str
     initial_function: str
-    number_of_monitoring_tubes: str | int
+    number_of_monitoring_tubes: int
     ground_level_stable: str
     well_stability: str | None = None
     owner: str | None = None
@@ -165,12 +160,12 @@ class GMWConstruction(CamelModel):
     delivered_location: str
     horizontal_positioning_method: str
     local_vertical_reference_point: str
-    offset: str | float
+    offset: float
     vertical_datum: str
-    ground_level_position: str | float | None = None
+    ground_level_position: float | None = None
     ground_level_positioning_method: str
     monitoring_tubes: list["MonitoringTube"]
-    date_to_be_corrected: str | date | None = None
+    date_to_be_corrected: str | None = None
 
 
 # noqa: N815 - Using mixedCase to match API requirements
@@ -186,33 +181,33 @@ class GMWElectrodeStatus(GMWEvent):
 class GMWGroundLevel(GMWEvent):
     well_stability: str = "stabielNAP"
     ground_level_stable: str = "nee"
-    ground_level_position: str | float
+    ground_level_position: float
     ground_level_positioning_method: str
 
 
 class GMWGroundLevelMeasuring(GMWEvent):
-    ground_level_position: str | float
+    ground_level_position: float
     ground_level_positioning_method: str
 
 
 class GMWInsertion(GMWEvent):
-    tube_number: str | int
-    tube_top_position: str | float
+    tube_number: int
+    tube_top_position: float
     tube_top_positioning_method: str
-    inserted_part_length: str | float
-    inserted_part_diameter: str | float
-    inserted_part_material: str | float
+    inserted_part_length: float
+    inserted_part_diameter: int
+    inserted_part_material: str
 
 
 class MonitoringTubeLengthening(CamelModel):
-    tube_number: str | int
+    tube_number: int
     variable_diameter: str = "ja"
-    tube_top_diameter: str | float | None = None
-    tube_top_position: str | float
+    tube_top_diameter: int | None = None
+    tube_top_position: float
     tube_top_positioning_method: str
     tube_material: str | None = None
     glue: str | None = None
-    plain_tube_part_length: str | float
+    plain_tube_part_length: float
 
 
 class GMWLengthening(GMWEvent):
@@ -229,22 +224,22 @@ class GMWOwner(GMWEvent):
 
 
 class MonitoringTubePositions(CamelModel):
-    tube_number: str | int
-    tube_top_position: str | float
+    tube_number: int
+    tube_top_position: float
     tube_top_positioning_method: str
 
 
 class GMWPositions(GMWEvent):
     well_stability: str = "nee"
     ground_level_stable: str = "instabiel"
-    ground_level_position: str | float
+    ground_level_position: float
     ground_level_positioning_method: str
     monitoring_tubes: list[MonitoringTubePositions]
 
 
 class GMWPositionsMeasuring(GMWEvent):
     monitoring_tubes: list[MonitoringTubePositions]
-    ground_level_position: str | float | None = None
+    ground_level_position: float | None = None
     ground_level_positioning_method: str | None = None
 
 
@@ -253,15 +248,15 @@ class GMWRemoval(GMWEvent):
 
 
 class GMWShift(GMWEvent):
-    ground_level_position: str | float
+    ground_level_position: float
     ground_level_positioning_method: str
 
 
 class MonitoringTubeShortening(CamelModel):
-    tube_number: str | int
-    tube_top_position: str | float
+    tube_number: int
+    tube_top_position: float
     tube_top_positioning_method: str
-    plain_tube_part_length: str | float
+    plain_tube_part_length: float
 
 
 class GMWShortening(GMWEvent):
@@ -270,7 +265,7 @@ class GMWShortening(GMWEvent):
 
 
 class MonitoringTubeStatus(CamelModel):
-    tube_number: str | int
+    tube_number: int
     tube_status: str
 
 
@@ -283,9 +278,9 @@ class GMWWellHeadProtector(GMWEvent):
 
 
 class FieldMeasurement(CamelModel):
-    parameter: str | int
+    parameter: int
     unit: str
-    field_measurement_value: str | float
+    field_measurement_value: float
     quality_control_status: str
 
 
@@ -318,7 +313,7 @@ class FieldResearch(CamelModel):
 class Analysis(CamelModel):
     parameter: str | int
     unit: str
-    analysis_measurement_value: str | float
+    analysis_measurement_value: float
     limit_symbol: str | None = None
     reporting_limit: str | float | None = None
     quality_control_status: str
@@ -361,10 +356,10 @@ class GLDStartregistration(CamelModel):
 
 class TimeValuePair(CamelModel):
     time: str | datetime
-    value: float | str | None = None
+    value: float | None = None
     status_quality_control: str = "onbekend"
     censor_reason: str | None = None
-    censoring_limitvalue: str | float | None = None
+    censoring_limitvalue: float | None = None
 
     @validator("time", pre=True, always=True)
     def format_datetime(cls, value):
@@ -419,23 +414,27 @@ class GLDAddition(CamelModel):
         return values
 
 
+class GLDClosure(CamelModel):
+    event_date: str
+
+
 class FRDStartRegistration(CamelModel):
     object_id_accountable_party: str | None = None
     groundwater_monitoring_nets: list[str] | None = None
     gmw_bro_id: str
-    tube_number: str | int
+    tube_number: int
 
 
 class MeasurementConfiguration(CamelModel):
     measurement_configuration_id: str
-    measurement_e1_cable_number: str | int
-    measurement_e1_electrode_number: str | int
-    measurement_e2_cable_number: str | int
-    measurement_e2_electrode_number: str | int
-    current_e1_cable_number: str | int
-    current_e1_electrode_number: str | int
-    current_e2_cable_number: str | int
-    current_e2_electrode_number: str | int
+    measurement_e1_cable_number: int
+    measurement_e1_electrode_number: int
+    measurement_e2_cable_number: int
+    measurement_e2_electrode_number: int
+    current_e1_cable_number: int
+    current_e1_electrode_number: int
+    current_e2_cable_number: int
+    current_e2_electrode_number: int
 
 
 class FRDGemMeasurementConfiguration(CamelModel):
@@ -449,8 +448,8 @@ class FRDEmmInstrumentConfiguration(CamelModel):
     secondary_receiver_coil_available: str
     relative_position_secondary_receiver_coil: str | int | None = None
     coil_frequency_known: str
-    coil_frequency: str | int | None = None
-    instrument_length: str | int
+    coil_frequency: int | None = None
+    instrument_length: int
 
 
 class FRDEmmMeasurement(CamelModel):
@@ -458,17 +457,17 @@ class FRDEmmMeasurement(CamelModel):
     measurement_operator_kvk: str
     determination_procedure: str
     measurement_evaluation_procedure: str
-    measurement_series_count: str | int
+    measurement_series_count: int
     measurement_series_values: str
     related_instrument_configuration_id: str
     calculation_operator_kvk: str
     calculation_evaluation_procedure: str
-    calculation_count: str | int
+    calculation_count: int
     calculation_values: str
 
 
 class GemMeasurement(CamelModel):
-    value: str | int
+    value: float
     unit: str
     configuration: str
 
@@ -476,7 +475,7 @@ class GemMeasurement(CamelModel):
 class RelatedCalculatedApparentFormationResistance(CamelModel):
     calculation_operator_kvk: str
     evaluation_procedure: str
-    element_count: str | int
+    element_count: int
     values: str
 
 
@@ -489,3 +488,74 @@ class FRDGemMeasurement(CamelModel):
     related_calculated_apparent_formation_resistance: (
         RelatedCalculatedApparentFormationResistance | None
     ) = None
+
+
+SourceDocumentModels = (
+    GAR
+    | GLDStartregistration
+    | GLDAddition
+    | GLDClosure
+    | GMWConstruction
+    | GMWElectrodeStatus
+    | GMNClosure
+    | GMNStartregistration
+    | GMNMeasuringPoint
+    | GMNMeasuringPointEndDate
+    | GMNTubeReference
+    | GMWGroundLevel
+    | GMWGroundLevelMeasuring
+    | GMWInsertion
+    | GMWLengthening
+    | GMWMaintainer
+    | GMWOwner
+    | GMWPositions
+    | GMWPositionsMeasuring
+    | GMWRemoval
+    | GMWShift
+    | GMWShortening
+    | GMWTubeStatus
+    | GMWWellHeadProtector
+    | FRDStartRegistration
+    | FRDGemMeasurementConfiguration
+    | FRDEmmInstrumentConfiguration
+    | FRDGemMeasurement
+    | FRDEmmMeasurement
+)
+
+BroDomainOptions = Literal["GMW", "GMN", "GAR", "GLD", "FRD"]
+RequestTypeOptions = Literal["registration", "replace", "insert", "move", "delete"]
+RegistrationTypeOptions = Literal[
+    "GMW_Construction",
+    "GMW_ElectrodeStatus",
+    "GMW_GroundLevel",
+    "GMW_GroundLevelMeasuring",
+    "GMW_Insertion",
+    "GMW_Lengthening",
+    "GMW_Maintainer",
+    "GMW_Owner",
+    "GMW_Positions",
+    "GMW_PositionsMeasuring",
+    "GMW_Removal",
+    "GMW_Shift",
+    "GMW_Shortening",
+    "GMW_TubeStatus",
+    "GMW_WellHeadProtector",
+    "GMN_Startregistration",
+    "GMN_MeasuringPoint",
+    "GMN_MeasuringPointEndDate",
+    "GMN_TubeReference",
+    "GMN_Closure",
+    "GAR",
+    "GLD_Startregistration",
+    "GLD_Addition",
+    "GLD_Closure",
+]
+
+
+class UploadTask(BaseModel):
+    bro_domain: BroDomainOptions
+    project_number: str
+    registration_type: RegistrationTypeOptions
+    request_type: RequestTypeOptions
+    sourcedocument_data: Any
+    metadata: UploadTaskMetadata

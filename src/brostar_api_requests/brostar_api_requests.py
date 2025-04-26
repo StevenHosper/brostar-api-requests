@@ -28,14 +28,19 @@ def move_gmw(
         request_type="move",
         sourcedocument_data=construction,
         metadata=metadata,
-    ).model_dump(mode="json")
-
+    )
+    payload = payload.model_dump(mode="json", by_alias=True)
     r = brostar.post_upload(payload)
+    r.raise_for_status()
+
     uuid: str = r.json()["uuid"]
     brostar.await_completed(uuid=uuid)
 
 
 def bulk_move_request(excel_file: str) -> None:
+    """Use an excel to move multiple GMWs.
+
+    Columns: internal_id, gmw, old_date, new_date"""
     # Access your API key
     brostar_api_key = os.getenv("BROSTAR_API_KEY")
     brostar = BROSTARConnection(brostar_api_key)  # BROSTAR API Key
@@ -43,23 +48,30 @@ def bulk_move_request(excel_file: str) -> None:
 
     df = pl.read_excel(excel_file, has_header=True)
     filtered_df = df.filter(pl.col("gmw").str.starts_with("GMW"))
+    filtered_df = filtered_df.filter(pl.col("internal_id").str.ends_with("-1"))
+    filtered_df = filtered_df.with_columns(
+        pl.col("internal_id").str.strip_suffix("-1").alias("internal_id"),
+    )
+
     formatter = PayloadFormatter(brostar)
 
     for row in filtered_df.iter_rows(named=True):
         logger.info(row)
-        bro_id = row["gmw"]
-        date_to_be_corrected = row["origineel"]
-        actual_date = row["correct"]
+        intern_id = row.get("internal_id")
+        bro_id = row.get("gmw")
+        date_to_be_corrected = row.get("old_date")
+        actual_date = row.get("new_date")
+
         logger.info(f"Moving {bro_id} from {date_to_be_corrected} to {actual_date}")
         construction, metadata = formatter.format_gmw_construction(bro_id)
-        construction.maintenanceResponsibleParty = "01174741"
-        construction.wellConstructionDate = actual_date
-        construction.dateToBeCorrected = date_to_be_corrected
+        construction.object_id_accountable_party = intern_id
+        construction.well_construction_date = actual_date
+        construction.date_to_be_corrected = date_to_be_corrected
         move_gmw(brostar, construction, metadata)
 
 
 def main():
-    file_path = r"C:\Users\steven.hosper\Desktop\PythonPackages\BrostarAPI\20250401 Nieuw inrichtingsdatums put voor GMW.xlsx"
+    file_path = r"C:\Users\steven.hosper\Desktop\PythonPackages\BrostarAPI\20250425_move_wells.xlsx"
     bulk_move_request(file_path)
 
 

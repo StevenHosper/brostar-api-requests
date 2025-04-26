@@ -1,10 +1,8 @@
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/f3b16baf087c40208c084bdad90ea6ce)](https://app.codacy.com/gh/StevenHosper/brostar-api-requests/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
+
 # brostar-api-requests
 
-👉\[\[\[**This is the initial readme for your
-[simple-modern-uv](https://github.com/jlevy/simple-modern-uv) template.** Fill it in and
-delete this message!
-Below are general setup instructions that you may remove or keep and adapt for your
-project.\]\]\]
+A helper package to make using the BROSTAR API even simpler.
 
 * * *
 
