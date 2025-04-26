@@ -1,63 +1,41 @@
-# This workflow will install Python dependencies, run tests and lint with a single version of Python
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
-
-name: CI
-
+# This workflow will install the dependencies and run the tests for the project.
+name: lint and test
 on:
   push:
-    # Use ["main", "master"] for CI only on the default branch.
-    # Use ["**"] for CI on all branches.
-    branches: ["main", "master"]
+    branches:
+      - master
+      - main
   pull_request:
-    branches: ["main", "master"]
+    branches:
+      - master
+      - main
 
-permissions:
-  contents: read
+  workflow_dispatch:
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        # Update this as needed:
-        # Common platforms: ["ubuntu-latest", "macos-latest", "windows-latest"]
-        os: ["ubuntu-latest"]
-        python-version: ["3.11", "3.12", "3.13"]
-
-    # Linux only by default. Use ${{ matrix.os }} for other OSes.
-    runs-on: ${{ matrix.os }}
-
+  lint:
+    name: lint
+    runs-on: "ubuntu-latest"
     steps:
-      # Generally following uv docs:
-      # https://docs.astral.sh/uv/guides/integration/github/
-
-      - name: Checkout (official GitHub action)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          # Important for versioning plugins:
-          fetch-depth: 0
+          python-version: 3.12
+      - uses: pre-commit/action@v3.0.1
 
-      - name: Install uv (official Astral action)
-        uses: astral-sh/setup-uv@v5
+  test:
+    name: test
+    runs-on: "ubuntu-latest"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          # Update this as needed:
-          version: "0.6.11"
-          enable-cache: true
-          python-version: ${{ matrix.python-version }}
-
-      - name: Set up Python (using uv)
-        run: uv python install
-
-      # Alternately can use the official Python action:
-      # - name: Set up Python (using actions/setup-python)
-      #   uses: actions/setup-python@v5
-      #   with:
-      #     python-version: ${{ matrix.python-version }}
-
-      - name: Install all dependencies
-        run: uv sync --all-extras --dev
-
-      - name: Run linting
-        run: uv run python devtools/lint.py
-
+          python-version: 3.12
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
       - name: Run tests
-        run: uv run pytest
+        run: pytest --tb=short --disable-warnings -q --maxfail=1 --cov=nens_meta --cov-report=xml:nens_meta/coverage.xml --cov-report=html:nens_meta/htmlcov --cov-fail-under=100 --cov-config=.coveragerc tests/
