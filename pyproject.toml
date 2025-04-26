@@ -42,6 +42,8 @@ dependencies = [
     "fastexcel>=0.13.0",
     "pydantic>=2.11.3",
     "dotenv>=0.9.9",
+    "pytest>=8.3.5",
+    "coverage>=7.8.0",
 ]
 
 

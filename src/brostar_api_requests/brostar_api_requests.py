@@ -117,7 +117,8 @@ def process_result(result: dict) -> None:
 
 def ingest_gld_ids_into_lizard():
     """Retrieve all uploadtasks / registrations and ingest the information into Lizard."""
-    brostar = BROSTARConnection()  # BROSTAR API Key
+    brostar_api_key = os.getenv("BROSTAR_API_KEY")
+    brostar = BROSTARConnection(brostar_api_key)  # BROSTAR API Key
     brostar.set_website(production=True)
 
     r = brostar.get(
