@@ -4,6 +4,8 @@ annotated-types==0.7.0
     # via pydantic
 colorama==0.4.6
     # via pytest
+coverage==7.8.0
+    # via brostar-api-requests (pyproject.toml)
 dotenv==0.9.9
     # via brostar-api-requests (pyproject.toml)
 fastexcel==0.13.0
