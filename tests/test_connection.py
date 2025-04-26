@@ -13,7 +13,8 @@ def brostar():
     return BROSTARConnection(token="test-token")
 
 
-def test_authentication_headers(brostar: BROSTARConnection):
+def test_authentication_headers():
+    brostar = BROSTARConnection(token="test-token")
     assert brostar.s.auth.username == "__key__"
     assert brostar.s.auth.password == "test-token"
 
