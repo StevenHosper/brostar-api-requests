@@ -1,8 +1,11 @@
+import logging
 import uuid
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, root_validator, validator
+from pydantic import BaseModel, field_validator, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 def to_camel(string: str) -> str:
@@ -12,7 +15,7 @@ def to_camel(string: str) -> str:
 
 class CamelModel(BaseModel):
     class Config:
-        allow_population_by_field_name = True
+        validate_by_name = True
 
         # Ensure aliasing works for all fields with underscores
         @staticmethod
@@ -303,7 +306,7 @@ class FieldResearch(CamelModel):
     temperature_difficult_to_measure: str
     field_measurements: list[FieldMeasurement] | None = None
 
-    @validator("sampling_date_time", pre=True, always=True)
+    @field_validator("sampling_date_time", mode="before")
     def format_datetime(cls, value):
         if isinstance(value, datetime):
             return value.isoformat()
@@ -325,7 +328,7 @@ class AnalysisProcess(CamelModel):
     valuation_method: str
     analyses: list[Analysis]
 
-    @validator("date", pre=True, always=True)
+    @field_validator("date", mode="before")
     def format_date(cls, value):
         if isinstance(value, date):
             return value.strftime("%Y-%m-%d")
@@ -355,13 +358,13 @@ class GLDStartregistration(CamelModel):
 
 
 class TimeValuePair(CamelModel):
-    time: str | datetime
+    time: str
     value: float | None = None
     status_quality_control: str = "onbekend"
     censor_reason: str | None = None
     censoring_limitvalue: float | None = None
 
-    @validator("time", pre=True, always=True)
+    @field_validator("time", mode="before")
     def format_datetime(cls, value):
         if isinstance(value, datetime):
             return value.isoformat(sep="T", timespec="seconds")
@@ -385,33 +388,28 @@ class GLDAddition(CamelModel):
     result_time: str | None = None
     time_value_pairs: list[TimeValuePair]
 
-    @validator("observation_id", pre=True, always=True)
-    def format_observation_id(cls, value):
-        if not value:
-            return f"_{uuid.uuid4()}"
-        return value
+    @model_validator(mode="before")
+    def generate_missing_ids(cls, data):
+        if isinstance(data, dict):
+            # Handle the UUIDs
+            if not data.get("observation_id"):
+                data["observation_id"] = f"_{uuid.uuid4()}"
 
-    @validator("observation_process_id", pre=True, always=True)
-    def format_observation_process_id(cls, value):
-        if not value:
-            return f"_{uuid.uuid4()}"
-        return value
+            if not data.get("observation_process_id"):
+                data["observation_process_id"] = f"_{uuid.uuid4()}"
 
-    @validator("measurement_timeseries_id", pre=True, always=True)
-    def format_measurement_timeseries_id(cls, value):
-        if not value:
-            return f"_{uuid.uuid4()}"
-        return value
+            if not data.get("measurement_timeseries_id"):
+                data["measurement_timeseries_id"] = f"_{uuid.uuid4()}"
 
-    @root_validator(pre=True)
-    def format_validation_status(cls, values):
-        if values.get("observation_type") == "reguliereMeting" and not values.get(
-            "validation_status"
-        ):
-            values["validation_status"] = "onbekend"
-        elif values.get("observation_type") == "controlemeting":
-            values["validation_status"] = None
-        return values
+            # Handle validation status
+            if data.get("observation_type") == "reguliereMeting" and not data.get(
+                "validation_status"
+            ):
+                data["validation_status"] = "onbekend"
+            elif data.get("observation_type") == "controlemeting":
+                data["validation_status"] = None
+
+        return data
 
 
 class GLDClosure(CamelModel):
