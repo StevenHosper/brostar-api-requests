@@ -43,4 +43,4 @@ jobs:
       - name: Generate report
         run: coverage xml -o ./devtools/codacy/coverage.xml
       - name: Send report to Codacy
-        run: bash <(curl -Ls https://coverage.codacy.com/get.sh) -r ./devtools/codacy/coverage.xml
+        run: bash <(curl -Ls https://coverage.codacy.com/get.sh) report -r ./devtools/codacy/coverage.xml
