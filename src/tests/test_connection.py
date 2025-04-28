@@ -3,7 +3,7 @@ import io
 import pytest
 import requests_mock
 
-from brostar_api_requests.connection import (
+from ..brostar_api_requests import (
     BROSTARConnection,  # Replace 'your_module' with actual module name
 )
 

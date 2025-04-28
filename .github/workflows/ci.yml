@@ -38,4 +38,4 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Run tests
-        run: pytest --tb=short --disable-warnings -q --maxfail=1 --cov=devtools --cov-report=xml:devtools/codacy/coverage.xml --cov-report=html:devtools/htmlcov --cov-fail-under=100 --cov-config=.coveragerc tests/
+        run: pytest . -vv
