@@ -27,6 +27,8 @@ jobs:
   test:
     name: test
     runs-on: "ubuntu-latest"
+    env:
+      CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Set up Python
