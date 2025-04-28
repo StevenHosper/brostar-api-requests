@@ -17,7 +17,7 @@ RegistrationTypeOptions = Literal["GMW_Construction"]
 load_dotenv()
 
 
-def move_gmw(
+def _move_gmw(
     brostar: BROSTARConnection, construction: GMWConstruction, metadata: UploadTaskMetadata
 ) -> None:
     """Send a move request that corrects the dates."""
@@ -67,7 +67,7 @@ def bulk_move_request(excel_file: str) -> None:
         construction.object_id_accountable_party = intern_id
         construction.well_construction_date = actual_date
         construction.date_to_be_corrected = date_to_be_corrected
-        move_gmw(brostar, construction, metadata)
+        _move_gmw(brostar, construction, metadata)
 
 
 def main():
