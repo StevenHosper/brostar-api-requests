@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 # Assume your models are imported here, like:
-from ..src.brostar_api_requests import (
+from ..brostar_api_requests import (
     GLDAddition,
     GMWLengthening,
     GMWMaintainer,
