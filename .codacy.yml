@@ -1,0 +1,15 @@
+---
+engines:
+  bandit:
+    exclude_paths:
+      - "tests/**"
+      - "test/**"
+      - "**/*.test.js"
+      - "**/test_*.py"
+      - "**/tests/**/*.py"
+exclude_paths:
+  - "tests/**"
+  - "test/**"
+  - "**/*.test.js"
+  - "**/test_*.py"
+  - "**/tests/**/*.py"
