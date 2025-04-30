@@ -1,4 +1,5 @@
 import io
+import os
 
 import pytest
 import requests_mock
@@ -9,14 +10,18 @@ from ..brostar_api_requests.connection import (
 
 
 @pytest.fixture
-def brostar():
-    return BROSTARConnection(token="test-token")
+def brostar_connection_factory():
+    def _create(token: str = None):
+        token = token or os.getenv("BROSTAR_API_KEY", "dummy-token")
+        return BROSTARConnection(token=token)
+
+    return _create
 
 
-def test_authentication_headers():
-    brostar = BROSTARConnection(token="test-token")
+def test_authentication_headers(brostar_connection_factory):
+    brostar = brostar_connection_factory()
     assert brostar.s.auth.username == "__key__"
-    assert brostar.s.auth.password == "test-token"
+    assert brostar.s.auth.password == os.getenv("BROSTAR_TEST_TOKEN", "dummy-token")
 
 
 def test_set_website_staging(brostar: BROSTARConnection):
