@@ -40,9 +40,9 @@ def test_upload_task_metadata_valid():
     metadata = UploadTaskMetadata(
         request_reference="REQ123",
         delivery_accountable_party="Some Party",
-        quality_regime="High",
+        quality_regime="IMBRO",
         bro_id="BRO123",
-        correction_reason="Correction needed",
+        correction_reason="eigenCorrectie",
     )
     assert metadata.request_reference == "REQ123"
     assert metadata.delivery_accountable_party == "Some Party"
@@ -133,7 +133,7 @@ def test_upload_task_valid():
     metadata = UploadTaskMetadata(
         request_reference="REQ123",
         delivery_accountable_party=None,
-        quality_regime="High",
+        quality_regime="IMBRO",
         bro_id=None,
         correction_reason=None,
     )
@@ -153,7 +153,7 @@ def test_upload_task_invalid_bro_domain():
     metadata = UploadTaskMetadata(
         request_reference="REQ123",
         delivery_accountable_party=None,
-        quality_regime="High",
+        quality_regime="IMBRO",
         bro_id=None,
         correction_reason=None,
     )
