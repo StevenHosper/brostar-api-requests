@@ -1,7 +1,10 @@
+from unittest.mock import MagicMock
+
 import pytest
 from pydantic import ValidationError
 
 from ..brostar_api_requests.formatter import (
+    PayloadFormatter,
     build_gmw_construction,
     format_electrodes,
     format_geo_ohm_cables,
@@ -440,3 +443,25 @@ def test_build_gmw_construction_invalid_nested_tube():
     ]
     with pytest.raises(ValidationError):
         build_gmw_construction(BASE_GMW_DATA, tube_data)
+
+
+def test_format_gmw_construction_valid(monkeypatch):
+    # Arrange
+    mock_brostar = MagicMock()
+
+    # Mocking API responses
+    mock_brostar.get.side_effect = [
+        MagicMock(json=lambda: {"results": [BASE_GMW_DATA]}),
+        MagicMock(json=lambda: {"results": BASE_TUBE_DATA}),
+    ]
+
+    formatter = PayloadFormatter(brostar=mock_brostar)
+
+    # Act
+    result = formatter.format_gmw_construction(gmw_bro_id="12345")
+
+    # Assert
+    assert isinstance(result, GMWConstruction)
+    # Optionally assert UploadTaskMetadata if it’s returned
+    # assert isinstance(result[1], UploadTaskMetadata)
+    assert result.monitoring_tubes[0].tube_number == 2

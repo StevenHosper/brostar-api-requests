@@ -4,7 +4,6 @@ from .upload_models import (
     GeoOhmCable,
     GMWConstruction,
     MonitoringTube,
-    UploadTaskMetadata,
 )
 
 
@@ -51,9 +50,7 @@ class PayloadFormatter:
     def __init__(self, brostar: BROSTARConnection) -> None:
         self.brostar = brostar
 
-    def format_gmw_construction(
-        self, gmw_bro_id: str
-    ) -> tuple[GMWConstruction, UploadTaskMetadata]:
+    def format_gmw_construction(self, gmw_bro_id: str) -> GMWConstruction:
         """Based on a BRO-ID retrieve all information for a construction"""
         # Get the main GMW data
         r = self.brostar.get("gmw/gmws", params={"bro_id": gmw_bro_id})
