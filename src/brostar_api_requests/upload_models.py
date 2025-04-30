@@ -1,9 +1,17 @@
 import logging
 import uuid
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, field_validator, model_validator
+
+from .type_helpers import (
+    BroDomainOptions,
+    CorrectionReasonOptions,
+    QualityRegimeOptions,
+    RegistrationTypeOptions,
+    RequestTypeOptions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +24,7 @@ def to_camel(string: str) -> str:
 class CamelModel(BaseModel):
     class Config:
         validate_by_name = True
+        extra = "ignore"
 
         # Ensure aliasing works for all fields with underscores
         @staticmethod
@@ -27,9 +36,9 @@ class CamelModel(BaseModel):
 class UploadTaskMetadata(CamelModel):
     request_reference: str
     delivery_accountable_party: str | None
-    quality_regime: str
     bro_id: str | None
-    correction_reason: str | None
+    quality_regime: QualityRegimeOptions
+    correction_reason: CorrectionReasonOptions | None = None
 
 
 class GARBulkUploadMetadata(CamelModel):
@@ -519,35 +528,6 @@ SourceDocumentModels = (
     | FRDGemMeasurement
     | FRDEmmMeasurement
 )
-
-BroDomainOptions = Literal["GMW", "GMN", "GAR", "GLD", "FRD"]
-RequestTypeOptions = Literal["registration", "replace", "insert", "move", "delete"]
-RegistrationTypeOptions = Literal[
-    "GMW_Construction",
-    "GMW_ElectrodeStatus",
-    "GMW_GroundLevel",
-    "GMW_GroundLevelMeasuring",
-    "GMW_Insertion",
-    "GMW_Lengthening",
-    "GMW_Maintainer",
-    "GMW_Owner",
-    "GMW_Positions",
-    "GMW_PositionsMeasuring",
-    "GMW_Removal",
-    "GMW_Shift",
-    "GMW_Shortening",
-    "GMW_TubeStatus",
-    "GMW_WellHeadProtector",
-    "GMN_Startregistration",
-    "GMN_MeasuringPoint",
-    "GMN_MeasuringPointEndDate",
-    "GMN_TubeReference",
-    "GMN_Closure",
-    "GAR",
-    "GLD_Startregistration",
-    "GLD_Addition",
-    "GLD_Closure",
-]
 
 
 class UploadTask(BaseModel):
