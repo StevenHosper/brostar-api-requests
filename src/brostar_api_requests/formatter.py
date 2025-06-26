@@ -42,6 +42,8 @@ def build_gmw_construction(
 ) -> GMWConstruction:
     return GMWConstruction(
         **gmw_data,
+        object_id_accountable_party=gmw_data.get("bro_id"),
+        number_of_monitoring_tubes=len(monitoring_tubes_data),
         monitoringTubes=format_monitoring_tubes(monitoring_tubes_data),
     )
 

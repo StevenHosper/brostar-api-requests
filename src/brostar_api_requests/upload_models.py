@@ -35,8 +35,8 @@ class CamelModel(BaseModel):
 ## Uploadtask models
 class UploadTaskMetadata(CamelModel):
     request_reference: str
-    delivery_accountable_party: str | None
-    bro_id: str | None
+    delivery_accountable_party: str | None = None
+    bro_id: str | None = None
     quality_regime: QualityRegimeOptions
     correction_reason: CorrectionReasonOptions | None = None
 
@@ -162,6 +162,7 @@ class GMWConstruction(CamelModel):
     delivery_context: str
     construction_standard: str
     initial_function: str
+    nitg_code: str
     number_of_monitoring_tubes: int
     ground_level_stable: str
     well_stability: str | None = None

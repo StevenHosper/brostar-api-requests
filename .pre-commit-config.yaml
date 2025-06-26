@@ -19,14 +19,6 @@ repos:
       # Run the formatter.
       - id: ruff-format
 
-# Codespell: Find and fix common spelling errors in code/comments
-  - repo: https://github.com/codespell-project/codespell
-    rev: v2.2.6  # You can update this to the latest release if needed
-    hooks:
-      - id: codespell
-        args: ["--write-changes"]
-        additional_dependencies: []  # Optional if you want to pin spell files
-
   # BasedPyright: Fast type checker (Pyright fork)
   - repo: local
     hooks:

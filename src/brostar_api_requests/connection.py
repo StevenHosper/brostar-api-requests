@@ -76,14 +76,12 @@ class BROSTARConnection:
         logger.info("Authentication set.")
 
     def get(self, endpoint: BrostarEndpoint, params: dict | None = None) -> requests.Response:
-        print(self.s.auth.username, self.s.auth.password)
         return self.s.get(url=f"{self.website}/{endpoint}/", params=params, timeout=15)
 
     def get_detail(self, endpoint: BrostarEndpoint, uuid: str) -> requests.Response:
         return self.s.get(url=f"{self.website}/{endpoint}/{uuid}", timeout=15)
 
     def post_upload(self, payload: dict[str, str], is_json: bool = True) -> requests.Response:
-        print(payload)
         if is_json:
             return self.s.post(url=f"{self.website}/uploadtasks/", json=payload, timeout=15)
         return self.s.post(url=f"{self.website}/uploadtasks/", data=payload, timeout=15)
