@@ -123,15 +123,18 @@ def bulk_move_request(excel_file: str) -> None:
         _move_gmw(brostar, construction, metadata)
 
 
-def map_polars_to_gmw_constructions(df: pl.DataFrame) -> GMWConstruction:
+def map_polars_to_gmw_constructions(df: pl.DataFrame, kvk: str) -> GMWConstruction:
     """
     Maps polars DataFrame to GMWConstruction objects.
     Groups by 'Putnaam' and creates one GMWConstruction per well with associated MonitoringTubes.
     """
     # Create monitoring tubes for this well
     monitoring_tubes = []
-    for i, row in enumerate(df.iter_rows(named=True)):
-        tube = create_monitoring_tube(row, i + 1)  # tube_number starts at 1
+    for index, row in enumerate(df.iter_rows(named=True)):
+        logger.info(f"Processing row {index + 1}: {row}")
+        tube = create_monitoring_tube(
+            row, tube_number=row["Filternummer"]
+        )  # tube_number starts at 1
         monitoring_tubes.append(tube)
 
     first_row = df.row(0, named=True)
@@ -154,8 +157,7 @@ def map_polars_to_gmw_constructions(df: pl.DataFrame) -> GMWConstruction:
         ground_level_stable=first_row.get("Maaiveld stabiel", ""),
         well_stability=first_row.get("Putstabiliteit"),
         # Optional fields with defaults
-        owner="17278718",  # Provincie Noord-Brabant
-        maintenance_responsible_party="16005077",  # BrabantWater
+        owner=kvk,
         well_head_protector=first_row.get("Beschermconstructie", ""),
         well_construction_date=format_date(first_row.get("Inrichtingsdatum")),
         delivered_location=delivered_location,
@@ -262,6 +264,72 @@ def bulk_gmw_tubenumber_correction_request(excel_file: str | Path, kvk: str) -> 
         _correct_gmw(brostar, upload_task)
 
 
+def retry_upload_task() -> None:
+    """Retry all upload tasks that are in PROCESSING state."""
+    import re
+
+    brostar_api_key = os.getenv("BROSTAR_API_KEY")
+    brostar = BROSTARConnection(brostar_api_key)  # BROSTAR API Key
+    brostar.set_website(production=True)
+
+    r = brostar.get("uploadtasks", params={"status": "FAILED"})
+    for task in r.json().get("results", []):
+        uuid = task["uuid"]
+        logger.info(f"Retrying upload task {uuid}")
+
+        if "mag niet voor de laatst geregistreerde gebeurtenis" in task["bro_errors"]:
+            metadata = task["metadata"]
+            metadata["correctionReason"] = "eigenCorrectie"
+            retry_r = brostar.s.patch(
+                url=f"{brostar.website}/uploadtasks/{uuid}/", json={"metadata": metadata}
+            )
+            retry_r.raise_for_status()
+
+            metadata["request_type"] = "insert"
+            retry_r = brostar.s.patch(
+                url=f"{brostar.website}/uploadtasks/{uuid}/", json={"metadata": metadata}
+            )
+            retry_r.raise_for_status()
+
+        if "moet liggen na of op de inrichtingsdatum" in task["bro_errors"]:
+            # Extract all dates in YYYY-MM-DD format
+            dates = re.findall(r"\d{4}-\d{2}-\d{2}", task["bro_errors"])
+
+            if len(dates) >= 2:
+                second_date = dates[1]  # The inrichtingsdatum
+                sourcedocument_data = task["sourcedocument_data"]
+                sourcedocument_data["eventDate"] = second_date
+
+                retry_r = brostar.s.patch(
+                    url=f"{brostar.website}/uploadtasks/{uuid}/",
+                    json={"sourcedocument_data": sourcedocument_data},
+                )
+                retry_r.raise_for_status()
+
+        if (
+            "Dit brondocument is al eerder via het bronhouderportaal aangeleverd aan de BRO"
+            in task["bro_errors"]
+        ):
+            retry_r = brostar.s.patch(
+                url=f"{brostar.website}/uploadtasks/{uuid}/", json={"status": "COMPLETED"}
+            )
+            retry_r.raise_for_status()
+
+            retry_r = brostar.s.patch(
+                url=f"{brostar.website}/uploadtasks/{uuid}/", json={"progress": 100.0}
+            )
+            retry_r.raise_for_status()
+
+            retry_r = brostar.s.patch(
+                url=f"{brostar.website}/uploadtasks/{uuid}/", json={"log": ""}
+            )
+            retry_r.raise_for_status()
+            continue
+
+        # retry_r = brostar.s.patch(url=f"{brostar.website}/uploadtasks/{uuid}/", json={"status": "PENDING"})
+        # retry_r.raise_for_status()
+
+
 def bulk_gmw_construction_request(excel_file: str | Path, kvk: str) -> None:
     """Use an excel to create multiple GMWs."""
     # Access your API key
@@ -273,12 +341,12 @@ def bulk_gmw_construction_request(excel_file: str | Path, kvk: str) -> None:
     putten = df.unique("Putnaam").to_series(0).to_list()
 
     for put in putten:
-        construction = map_polars_to_gmw_constructions(df.filter(pl.col("Putnaam").eq(put)))
+        construction = map_polars_to_gmw_constructions(df.filter(pl.col("Putnaam").eq(put)), kvk)
         ### Setup the payload
         metadata = UploadTaskMetadata(
             request_reference=f"{put}",
             delivery_accountable_party=kvk,
-            quality_regime="IMBRO",
+            quality_regime="IMBRO",  # Add to row?
         )
 
         ## Extract excel into GMW Construction
@@ -309,6 +377,53 @@ def pop_upload_task_fields(upload_task: dict) -> dict:
     upload_task.pop("updated_at", None)
     upload_task.pop("data_owner", None)
     return upload_task
+
+
+def deliver_gld_start_registration(
+    internal_id: str,
+    bro_id: str,
+    tube_number: int,
+    delivery_accountable_party: str,
+    monitoring_nets: list[str],
+    project_number: str,
+):
+    """Send a gld start registration request that corrects the dates."""
+
+    brostar_api_key = os.getenv("BROSTAR_API_KEY")
+    brostar = BROSTARConnection(brostar_api_key)
+    sourcedocument_data = {
+        "gmwBroId": bro_id,
+        "tubeNumber": tube_number,
+        "groundwaterMonitoringNets": monitoring_nets,
+        "objectIdAccountableParty": internal_id,
+    }
+    broid_dict = {}
+    for quality_regime in ["IMBRO", "IMBRO-A"]:
+        metadata = UploadTaskMetadata(
+            request_reference="Vitens-BROSTAR",
+            delivery_accountable_party=delivery_accountable_party,
+            quality_regime=quality_regime,
+        )
+
+        payload = UploadTask(
+            bro_domain="GLD",
+            project_number=project_number,
+            registration_type="GLD_StartRegistration",
+            request_type="registration",
+            sourcedocument_data=sourcedocument_data,
+            metadata=metadata,
+        )
+        payload = payload.model_dump(mode="json", by_alias=True)
+
+        r = brostar.post_upload(payload)
+        r.raise_for_status()
+
+        uuid: str = r.json()["uuid"]
+        r = brostar.await_completed(uuid=uuid)
+
+        broid_dict[quality_regime] = r.json().get("broId")
+
+    return broid_dict
 
 
 def clear_fields_for_upload(upload_task: dict) -> dict:
@@ -467,6 +582,7 @@ def ingest_gld_ids_into_lizard():
     while r.json()["next"] is not None:
         for result in r.json()["results"]:
             logger.info(f"Processing {result}")
+
             # Get the bro_id from the registration and update Lizard
             process_result(result)
 
