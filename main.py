@@ -1,12 +1,36 @@
 import logging
 
+import polars as pl
+
 from src.brostar_api_requests.brostar_api_requests import (
     send_gldaddition_for_vitens_location,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def main():
-    send_gldaddition_for_vitens_location("46B-0735001", "62254944", "1103")
+    # Voor het waterschap Valei en Veluwe
+    # file_path = r"C:\Users\steven.hosper\Downloads\overview_gmn_vitens_waterschap.xlsx"
+
+    # Ingest GLD Vitens naar Lizard
+    # df = pl.read_excel(file_path)
+    # df = df.filter(pl.col("bro_id").is_not_null())
+    # for row in df.iter_rows(named=True):
+    #     gld_to_lizard(row['objectIdAccountableParty'], row['bro_id'])
+
+    # Voor de rest
+    file_path = r"C:\Users\steven.hosper\Downloads\overview_gmn_vitens_v2.xlsx"
+
+    df = pl.read_excel(file_path)
+    for item in df.iter_rows(named=True):
+        logger.info(item)
+        send_gldaddition_for_vitens_location(
+            item["objectIdAccountableParty"],
+            str(item["deliveryAccountableParty"]),
+            str(item["projectNumber"]),
+        )
+
     # file_path = r"C:\Users\steven.hosper\Downloads\duplicates_ids.xlsx"
     # correct_bulk_gld(file_path)
     # retry_upload_task()

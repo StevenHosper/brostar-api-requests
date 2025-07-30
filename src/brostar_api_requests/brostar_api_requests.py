@@ -234,14 +234,12 @@ def setup_time_value_pairs(events_df: pl.DataFrame, limits: dict[str, str]) -> l
         .dt.convert_time_zone(time_zone="Europe/Amsterdam")
         .alias("datetime"),
     )
-    logger.info(events_df)
     events_df = events_df.with_columns(
         pl.col("datetime")
         .map_elements(convert_timeaware_to_bro_str, return_dtype=pl.String)
         .alias("datetime"),
     )
 
-    logger.info(events_df)
     for row in events_df.iter_rows(named=True):
         if row["value"] in [None, "None"]:
             value = None
@@ -352,7 +350,8 @@ def send_gldaddition_for_vitens_location(business_id: str, kvk: str, projectnumm
                 r.raise_for_status()
                 events += r.json().get("results", [])
 
-            events_df = pl.DataFrame(events)
+            events_df = pl.DataFrame(events, schema_overrides={"value": pl.Float64})
+            events_df = events_df.filter(pl.col("value").is_not_null())
             events_df = events_df.with_columns(
                 pl.col("time").str.to_datetime(format="%Y-%m-%dT%H:%M:%SZ").alias("datetime")
             )
@@ -373,15 +372,16 @@ def send_gldaddition_for_vitens_location(business_id: str, kvk: str, projectnumm
                 logger.info(procedure)
                 for i in range(0, n_rows, CHUNK_SIZE):
                     chunk = procedure_events_df.slice(i, CHUNK_SIZE)
-                    start_time = chunk["time"][0]
-                    end_time = chunk["time"][-1]
-                    result_time = chunk["time"][-1]  # Only do voorlopig and controle
 
                     observatie_type = procedure["observationtype"]
                     proces_referentie = procedure["processreference"]
                     evaluatie_procedure = procedure["evaluationprocedure"]
                     meetinstrument_type = procedure["measurementinstrumenttype"]
-                    luchtdrukcompensatie = procedure["airpressurecompensationtype"]
+                    luchtdrukcompensatie = (
+                        procedure["airpressurecompensationtype"]
+                        if procedure["airpressurecompensationtype"] not in [None, "geen", ""]
+                        else None
+                    )
                     logger.info(chunk)
 
                     metadata = UploadTaskMetadata(
@@ -390,6 +390,11 @@ def send_gldaddition_for_vitens_location(business_id: str, kvk: str, projectnumm
                         delivery_accountable_party=kvk,
                         quality_regime="IMBRO",
                     )
+
+                    time_value_pairs = setup_time_value_pairs(chunk, limits)
+                    start_time = time_value_pairs[0]["time"]
+                    end_time = time_value_pairs[-1]["time"]
+                    result_time = time_value_pairs[-1]["time"]  # Only do voorlopig and controle
 
                     sourcedocument_data = GLDAddition(
                         date=result_time.split("T")[0],
@@ -405,7 +410,7 @@ def send_gldaddition_for_vitens_location(business_id: str, kvk: str, projectnumm
                         begin_position=start_time.split("T")[0],
                         end_position=end_time.split("T")[0],
                         result_time=result_time,
-                        time_value_pairs=setup_time_value_pairs(events_df=chunk, limits=limits),
+                        time_value_pairs=time_value_pairs,
                     )
 
                     payload = UploadTask(
@@ -434,7 +439,7 @@ def send_gldaddition_for_vitens_location(business_id: str, kvk: str, projectnumm
                     retry = 0
                     while (
                         result_dict.get("status", "UNKNOWN") in ["PROCESSING", "PENDING"]
-                        and retry < 10
+                        and retry < 5
                     ):
                         try:
                             result_dict = check_status(result_dict["url"], brostar_s=brostar.s)
