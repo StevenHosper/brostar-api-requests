@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 import pytest
@@ -18,13 +19,30 @@ from ..brostar_api_requests.upload_models import (
 )
 
 
+@pytest.fixture
+def gld_addition_factory() -> GLDAddition:
+    def _create(observation_type: Literal["controlemeting", "reguliereMeting"] = "reguliereMeting"):
+        return GLDAddition(
+            investigator_kvk="12345678",
+            observation_type=observation_type,
+            evaluation_procedure="ProcedureA",
+            measurement_instrument_type="InstrumentX",
+            process_reference="PR123",
+            begin_position="2024-01-01T00:00:00",
+            end_position="2024-01-02T00:00:00",
+            time_value_pairs=[TimeValuePair(time="2024-01-01T12:00:00", value=10.0)],
+        )
+
+    return _create
+
+
 def test_upload_task_metadata_valid():
     metadata = UploadTaskMetadata(
         request_reference="REQ123",
         delivery_accountable_party="Some Party",
-        quality_regime="High",
+        quality_regime="IMBRO",
         bro_id="BRO123",
-        correction_reason="Correction needed",
+        correction_reason="eigenCorrectie",
     )
     assert metadata.request_reference == "REQ123"
     assert metadata.delivery_accountable_party == "Some Party"
@@ -115,7 +133,7 @@ def test_upload_task_valid():
     metadata = UploadTaskMetadata(
         request_reference="REQ123",
         delivery_accountable_party=None,
-        quality_regime="High",
+        quality_regime="IMBRO",
         bro_id=None,
         correction_reason=None,
     )
@@ -135,7 +153,7 @@ def test_upload_task_invalid_bro_domain():
     metadata = UploadTaskMetadata(
         request_reference="REQ123",
         delivery_accountable_party=None,
-        quality_regime="High",
+        quality_regime="IMBRO",
         bro_id=None,
         correction_reason=None,
     )
@@ -165,17 +183,8 @@ def test_time_value_pair_valid_string():
     assert pair.time == "2024-01-01T12:30:00"
 
 
-def test_gld_addition_auto_generate_ids():
-    gld = GLDAddition(
-        investigator_kvk="12345678",
-        observation_type="reguliereMeting",
-        evaluation_procedure="ProcedureA",
-        measurement_instrument_type="InstrumentX",
-        process_reference="PR123",
-        begin_position="2024-01-01T00:00:00",
-        end_position="2024-01-02T00:00:00",
-        time_value_pairs=[TimeValuePair(time="2024-01-01T12:00:00", value=10.0)],
-    )
+def test_gld_addition_auto_generate_ids(gld_addition_factory):
+    gld = gld_addition_factory(observation_type="controlemeting")
     # The fields should have been auto-populated with a UUID string
     assert gld.observation_id.startswith("_")
     assert gld.observation_process_id.startswith("_")
@@ -187,31 +196,13 @@ def test_gld_addition_auto_generate_ids():
     UUID(gld.measurement_timeseries_id[1:])
 
 
-def test_gld_addition_validation_status_reguliere_meting():
-    gld = GLDAddition(
-        investigator_kvk="12345678",
-        observation_type="reguliereMeting",
-        evaluation_procedure="ProcedureA",
-        measurement_instrument_type="InstrumentX",
-        process_reference="PR123",
-        begin_position="2024-01-01T00:00:00",
-        end_position="2024-01-02T00:00:00",
-        time_value_pairs=[TimeValuePair(time="2024-01-01T12:00:00", value=10.0)],
-    )
+def test_gld_addition_validation_status_reguliere_meting(gld_addition_factory):
+    gld = gld_addition_factory(observation_type="reguliereMeting")
     assert gld.validation_status == "onbekend"
 
 
-def test_gld_addition_validation_status_controlemeting():
-    gld = GLDAddition(
-        investigator_kvk="12345678",
-        observation_type="controlemeting",
-        evaluation_procedure="ProcedureB",
-        measurement_instrument_type="InstrumentY",
-        process_reference="PR456",
-        begin_position="2024-02-01T00:00:00",
-        end_position="2024-02-02T00:00:00",
-        time_value_pairs=[TimeValuePair(time="2024-02-01T12:00:00", value=12.0)],
-    )
+def test_gld_addition_validation_status_controlemeting(gld_addition_factory):
+    gld = gld_addition_factory(observation_type="controlemeting")
     assert gld.validation_status is None
 
 
