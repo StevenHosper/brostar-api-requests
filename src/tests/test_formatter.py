@@ -180,6 +180,7 @@ def test_format_geo_ohm_cables_invalid_electrode_data():
 
 # Sample base GMW data
 BASE_GMW_DATA = {
+    "bro_id": "GMW000000123456",
     "object_id_accountable_party": "org-123",
     "delivery_context": "some-context",
     "construction_standard": "NEN",
