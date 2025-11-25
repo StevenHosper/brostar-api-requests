@@ -6,6 +6,7 @@ import requests_mock
 
 from ..brostar_api_requests.connection import (
     BROSTARConnection,  # Replace 'your_module' with actual module name
+    setup_brostar_connection,
 )
 
 
@@ -141,3 +142,13 @@ def test_check_status(brostar: BROSTARConnection):
         m.post("https://staging.brostar.nl/api/uploadtasks/abc123/check_status/", status_code=200)
         res = brostar.check_status("abc123")
         assert res.status_code == 200
+
+
+def test_setup_brostar_connection(monkeypatch):
+    token = os.getenv("BROSTAR_TEST_TOKEN", "dummy-token")
+    brostar = setup_brostar_connection(token=token, production=True)
+    assert brostar.s.auth.password == token
+    assert brostar.website == "https://www.brostar.nl/api"
+
+    brostar_staging = setup_brostar_connection(token=token, production=False)
+    assert brostar_staging.website == "https://staging.brostar.nl/api"

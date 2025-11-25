@@ -76,15 +76,15 @@ class BROSTARConnection:
         logger.info("Authentication set.")
 
     def get(self, endpoint: BrostarEndpoint, params: dict | None = None) -> requests.Response:
-        return self.s.get(url=f"{self.website}/{endpoint}/", params=params, timeout=15)
+        return self.s.get(url=f"{self.website}/{endpoint}/", params=params, timeout=30)
 
     def get_detail(self, endpoint: BrostarEndpoint, uuid: str) -> requests.Response:
-        return self.s.get(url=f"{self.website}/{endpoint}/{uuid}", timeout=15)
+        return self.s.get(url=f"{self.website}/{endpoint}/{uuid}", timeout=30)
 
     def post_upload(self, payload: dict[str, str], is_json: bool = True) -> requests.Response:
         if is_json:
-            return self.s.post(url=f"{self.website}/uploadtasks/", json=payload, timeout=15)
-        return self.s.post(url=f"{self.website}/uploadtasks/", data=payload, timeout=15)
+            return self.s.post(url=f"{self.website}/uploadtasks/", json=payload, timeout=30)
+        return self.s.post(url=f"{self.website}/uploadtasks/", data=payload, timeout=30)
 
     def post_gar_bulk(
         self, payload: dict[str, str], fieldwork_file: BinaryIO, lab_file: BinaryIO
@@ -123,12 +123,12 @@ class BROSTARConnection:
         Output: bro_id or None.
         """
         timer = 0
-        r = self.s.get(url=f"{self.website}/uploadtasks/{uuid}/", timeout=15)
+        r = self.s.get(url=f"{self.website}/uploadtasks/{uuid}/", timeout=30)
         r.raise_for_status()
         bro_id = r.json().get("bro_id", None)
-        while bro_id is None and timer < 45:
+        while bro_id is None and timer < 10:
             time.sleep(3)
-            r = self.s.get(url=f"{self.website}/uploadtasks/{uuid}/", timeout=15)
+            r = self.s.get(url=f"{self.website}/uploadtasks/{uuid}/", timeout=30)
             r.raise_for_status()
             bro_id = r.json().get("bro_id", None)
             timer += 3
@@ -142,13 +142,13 @@ class BROSTARConnection:
         Output: bro_id or None.
         """
         timer = 0
-        r = self.s.get(url=f"{self.website}/uploadtasks/{uuid}/", timeout=15)
+        r = self.s.get(url=f"{self.website}/uploadtasks/{uuid}/", timeout=30)
         r.raise_for_status()
         status = r.json().get("status", "PENDING")
-        while status != "COMPLETED" and timer < 45:
+        while status != "COMPLETED" and timer < 16:
             time.sleep(3)
             try:
-                r = self.s.get(url=f"{self.website}/uploadtasks/{uuid}/", timeout=15)
+                r = self.s.get(url=f"{self.website}/uploadtasks/{uuid}/", timeout=30)
                 r.raise_for_status()
             except requests.exceptions.HTTPError as e:
                 logger.exception(f"Error while checking status: {e}")
@@ -158,7 +158,14 @@ class BROSTARConnection:
             status = r.json().get("status", "PENDING")
             timer += 3
 
+        logger.warning(f"Final status: {status}")
         return r
 
     def check_status(self, uuid: str) -> requests.Response:
-        return self.s.post(url=f"{self.website}/uploadtasks/{uuid}/check_status/", timeout=15)
+        return self.s.post(url=f"{self.website}/uploadtasks/{uuid}/check_status/", timeout=30)
+
+
+def setup_brostar_connection(token: str, production: bool = False) -> BROSTARConnection:
+    brostar = BROSTARConnection(token)
+    brostar.set_website(production=production)
+    return brostar
