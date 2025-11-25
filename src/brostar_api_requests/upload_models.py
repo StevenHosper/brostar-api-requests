@@ -162,7 +162,7 @@ class GMWConstruction(CamelModel):
     delivery_context: str
     construction_standard: str
     initial_function: str
-    nitg_code: str
+    nitg_code: str | None = None
     number_of_monitoring_tubes: int
     ground_level_stable: str
     well_stability: str | None = None
@@ -172,9 +172,9 @@ class GMWConstruction(CamelModel):
     well_construction_date: str
     delivered_location: str
     horizontal_positioning_method: str
-    local_vertical_reference_point: str
-    offset: float
-    vertical_datum: str
+    local_vertical_reference_point: str = "NAP"
+    offset: float = 0.0
+    vertical_datum: str = "NAP"
     ground_level_position: float | None = None
     ground_level_positioning_method: str
     monitoring_tubes: list["MonitoringTube"]
@@ -243,8 +243,8 @@ class MonitoringTubePositions(CamelModel):
 
 
 class GMWPositions(GMWEvent):
-    well_stability: str = "nee"
-    ground_level_stable: str = "instabiel"
+    well_stability: str | None = None
+    ground_level_stable: str | None = None
     ground_level_position: float
     ground_level_positioning_method: str
     monitoring_tubes: list[MonitoringTubePositions]
@@ -379,6 +379,32 @@ class TimeValuePair(CamelModel):
         if isinstance(value, datetime):
             return value.isoformat(sep="T", timespec="seconds")
         return value
+
+
+class DeleteGLDAddition(CamelModel):
+    date: str | None = None
+    result_time: str | None = None
+    observation_process_id: str
+    observation_status: str | None = None
+    observation_type: str
+    observation_id: str
+    begin_position: str
+    end_position: str
+    investigator_kvk: str = "00000000"
+    evaluation_procedure: str = "dummy"
+    measurement_instrument_type: str = "dummy"
+    process_reference: str = "dummy"
+    air_pressure_compensation_type: str | None = None
+    time_value_pairs: list[TimeValuePair]
+
+    @model_validator(mode="before")
+    def handle_datetime_values(cls, data):
+        if isinstance(data, dict):
+            # Ensure that datetime values are in ISO format
+            for key in ["begin_position", "end_position"]:
+                if key in data and isinstance(data[key], datetime):
+                    data[key] = data[key].strftime("%Y-%m-%d")
+        return data
 
 
 class GLDAddition(CamelModel):
