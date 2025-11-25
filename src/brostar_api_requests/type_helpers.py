@@ -20,7 +20,7 @@ RegistrationTypeOptions = Literal[
     "GMW_Shortening",
     "GMW_TubeStatus",
     "GMW_WellHeadProtector",
-    "GMN_Startregistration",
+    "GMN_StartRegistration",
     "GMN_MeasuringPoint",
     "GMN_MeasuringPointEndDate",
     "GMN_TubeReference",
@@ -29,4 +29,8 @@ RegistrationTypeOptions = Literal[
     "GLD_StartRegistration",
     "GLD_Addition",
     "GLD_Closure",
+    "FRD_StartRegistration",
+    "FRD_Closure",
+    "FRD_GEM_MeasurementConfiguration",
+    "FRD_GEM_Measurement",
 ]
