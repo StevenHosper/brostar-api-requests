@@ -1,9 +1,8 @@
 import ast
-import csv
-import datetime
 import logging
 import os
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -11,12 +10,12 @@ import polars as pl
 import pytz
 import requests
 from dotenv import load_dotenv
-from requests.adapters import HTTPAdapter, Retry
 
 from .connection import BROSTARConnection
 from .formatter import PayloadFormatter
+from .lizard_requests import setup_lizard_session
 from .upload_models import (
-    GLDAddition,
+    DeleteGLDAddition,
     GMWConstruction,
     MonitoringTube,
     UploadTask,
@@ -78,7 +77,7 @@ def delete_invalid_upload_tasks() -> None:
 
     next = ""
     while next is not None:
-        r = brostar.get("uploadtasks", params={"status": "PROCESSING", "log": "XML is not valid"})
+        r = brostar.get("uploadtasks", params={"status": "FAILED"})
         r.raise_for_status()
         tasks = r.json()["results"]
 
@@ -142,24 +141,6 @@ def bulk_move_request(excel_file: str) -> None:
         _move_gmw(brostar, construction, metadata)
 
 
-def setup_lizard_session() -> requests.Session:
-    lizard_api_key = os.getenv("LIZARD_API_KEY")
-    ls = requests.Session()
-    ls.headers = {
-        "username": "__key__",
-        "password": lizard_api_key,
-        "Content-Type": "application/json",
-    }
-    retry = Retry(
-        total=6,
-        backoff_factor=0.5,
-    )
-    adapter = HTTPAdapter(pool_connections=5, pool_maxsize=5, max_retries=retry)
-    ls.mount("http://", adapter)
-    ls.mount("https://", adapter)
-    return ls
-
-
 def post_timeseries_events(
     timeseries_url: str, events_df: pl.DataFrame, session: requests.Session
 ) -> None:
@@ -169,15 +150,15 @@ def post_timeseries_events(
     r = session.post(
         url=f"{timeseries_url}events/",
         json=events_df.to_dicts(),
-        timeout=30,
+        timeout=120,
     )
+    logger.info(f"Response status code: {r.status_code} - {r.content}")
     r.raise_for_status()
 
 
 def create_brostar_task(url: str, payload: dict, brostar_s: requests.Session) -> dict:
     r = brostar_s.post(url, json=payload, timeout=60)
-    print(r.url)
-    print(r.json())
+    logger.info(r.url)
     if r.status_code < 250:
         time.sleep(10)
         res = brostar_s.get(r.json()["url"], timeout=30)
@@ -194,276 +175,224 @@ def check_status(url: str, brostar_s: requests.Session) -> dict:
     return r.json()
 
 
-def determine_status_quality_control(value: int | None) -> str:
-    if value is None:
-        return "nogNietBeoordeeld"
-
-    # Sort the items by their value
-    sorted_items = sorted(VALIDATION_MAPPING.items(), key=lambda item: item[1])
-
-    # Iterate over sorted items
-    for key, threshold in sorted_items:
-        if value < threshold:
-            return key
-
-    # If no valid key is found, return a default value (optional)
-    return "Invalid value"
-
-
-def determine_censor_reason(detection_limit: str):
-    if detection_limit == ">":
-        return "groterDanLimietwaarde"
-    elif detection_limit == "<":
-        return "kleinerDanLimietwaarde"
-    else:
-        return "onbekend"
-
-
-def convert_timeaware_to_bro_str(datetime_val: datetime.datetime) -> str:
-    datetime_str = datetime_val.strftime("%Y-%m-%dT%H:%M:%S%z")
-    return datetime_str[:22] + ":" + datetime_str[22:]
-
-
-def setup_time_value_pairs(events_df: pl.DataFrame, limits: dict[str, str]) -> list[dict[str, str]]:
-    """Transforms the event_df (lizard format) to BROSTAR (BRO) format."""
-    brostar_data_list = []
-
-    events_df = events_df.with_columns(
-        pl.col("datetime")
-        .dt.replace_time_zone(time_zone="UTC", non_existent="null")
-        .dt.convert_time_zone(time_zone="Europe/Amsterdam")
-        .alias("datetime"),
-    )
-    events_df = events_df.with_columns(
-        pl.col("datetime")
-        .map_elements(convert_timeaware_to_bro_str, return_dtype=pl.String)
-        .alias("datetime"),
+def get_observations(
+    bro_id: str, observation_status: Literal["volledigBeoordeeld", "voorlopig", None, "niet"]
+) -> pl.DataFrame:
+    r = requests.get(
+        f"https://publiek.broservices.nl/gm/gld/v1/objects/{bro_id}/observationsSummary"
     )
 
-    for row in events_df.iter_rows(named=True):
-        if row["value"] in [None, "None"]:
-            value = None
-        else:
-            value = row["value"]
+    results = r.json()
+    if len(results) == 0:
+        return None
 
-        brostar_data = {
-            "time": row["datetime"],
-            "value": value,
-            "statusQualityControl": determine_status_quality_control(row["flag"]),
-        }
+    df = pl.DataFrame(results)
+    logger.info(df)
+    if observation_status == "niet":
+        return df
 
-        if brostar_data["statusQualityControl"] == "afgekeurd" and value in ["", None]:
-            brostar_data["censorReason"] = determine_censor_reason(row["detection_limit"])
-        elif brostar_data["value"] is None:
-            brostar_data["censorReason"] = "onbekend"
-        else:
-            brostar_data["censorReason"] = None
-
-        if brostar_data["censorReason"] in [
-            "groterDanLimietwaarde",
-            "kleinerDanLimietwaarde",
-        ]:
-            brostar_data["censorLimit"] = (
-                limits["referenceLevel"]
-                if brostar_data["censorReason"] == "groterDanLimietwaarde"
-                else limits["filterBottomLevel"]
-            )
-
-        brostar_data_list.append(brostar_data)
-
-    return brostar_data_list
+    df = df.filter(pl.col("observationStatus") == observation_status)
+    logger.info(df)
+    return df
 
 
-def send_gldaddition_for_vitens_location(business_id: str, kvk: str, projectnummer: str) -> None:
-    """The GLD-ID should be available within the location metadata of the Lizard API. Otherwise this function will fail. For now this only works with IMBRO, as that was the purpose for the function."""
-    brostar_api_key = os.getenv("BROSTAR_API_KEY")
-    brostar = BROSTARConnection(brostar_api_key)  # BROSTAR API Key
-    brostar.set_website(production=True)
-
+def get_timeseries(location: dict, observation_code: str | None = None) -> list[dict]:
     ls = setup_lizard_session()
+    params = {
+        "limit": 50,
+        "location__code": location["code"],
+    }
+    if observation_code is not None:
+        params["observation_type__code"] = observation_code
 
-    # Fetch the location metadata from the Lizard API
     r = ls.get(
-        url="https://vitens.lizard.net/api/v4/locations/", params={"code__startswith": business_id}
+        url="https://vitens.lizard.net/api/v4/timeseries/",
+        params=params,
     )
     r.raise_for_status()
-    locations = r.json().get("results", [])
-    for location in locations:
-        logger.info(f"Processing location: {location}")
-        location_metadata = location.get("extra_metadata", {}).get("bro", {})
-        limits = {
-            "referenceLevel": location_metadata.get("temporal_data", [{}])[0].get(
-                "referenceLevel", None
-            ),
-            "filterBottomLevel": location_metadata.get("filterBottomDepth", None),
-        }
-        gld_id_imbro = location_metadata.get("broid_gld_imbro", None)
-        quality_regime = "IMBRO"
-        if gld_id_imbro is None:
-            logger.info(f"No GLD ID found for location {location['code']}. Skipping.")
-            continue
+    return r.json()["results"]
 
-        for observation_type in [28, 911]:
-            r = ls.get(
-                url="https://vitens.lizard.net/api/v4/timeseries/",
-                params={"location__code": location["code"], "observation_type": observation_type},
+
+def post_timeseries(events: pl.DataFrame, timeserie_url: str):
+    ls = setup_lizard_session()
+    r = ls.post(
+        url=f"{timeserie_url}events/",
+        json=events.to_dicts(),
+        timeout=120,
+    )
+    r.raise_for_status()
+    logger.info("Succesfully posted events")
+    logger.info(r)
+
+
+def get_timeserie_events(
+    timeserie_url: str, start_date: str | None = None, end_date: str | None = None
+) -> pl.DataFrame:
+    ls = setup_lizard_session()
+    params = {
+        "limit": 25000,
+    }
+    if start_date:
+        params["start"] = start_date
+    if end_date:
+        params["end"] = end_date
+
+    r = ls.get(
+        url=f"{timeserie_url}events/",
+        params=params,
+    )
+    r.raise_for_status()
+
+    df = pl.from_dicts(
+        r.json()["results"],
+        schema=pl.Schema(
+            {
+                "time": pl.String,
+                "value": pl.Float64,
+                "flag": pl.Int64,
+                "validation_code": pl.String,
+                "comment": pl.String,
+                "last_modified": pl.String,
+                "detection_limit": pl.String,
+            }
+        ),
+        strict=False,
+    )
+
+    while r.json()["next"]:
+        r = ls.get(r.json()["next"])
+        r.raise_for_status()
+
+        df = df.vstack(
+            pl.from_dicts(
+                r.json()["results"],
+                schema=pl.Schema(
+                    {
+                        "time": pl.String,
+                        "value": pl.Float64,
+                        "flag": pl.Int64,
+                        "validation_code": pl.String,
+                        "comment": pl.String,
+                        "last_modified": pl.String,
+                        "detection_limit": pl.String,
+                    }
+                ),
+                strict=False,
             )
-            r.raise_for_status()
-            timeseries = r.json().get("results", [])
-            if len(timeseries) != 1:
-                logger.info(
-                    f"No timeseries found for location {location['code']} and observation type {observation_type}. Skipping."
+        )
+
+    return df
+
+
+def convert_dates(data: dict) -> dict:
+    """
+    Convert startDate and endDate from DD-MM-YYYY to YYYY-MM-DD format.
+    Add 1 day to endDate.
+    """
+    # Parse input dates
+    start = datetime.strptime(data["startDate"], "%d-%m-%Y")
+    end = datetime.strptime(data["endDate"], "%d-%m-%Y") + timedelta(days=1)
+
+    # Update dictionary with new format
+    data["startDate"] = start.strftime("%Y-%m-%d")
+    data["endDate"] = end.strftime("%Y-%m-%d")
+
+    return data
+
+
+def retrieve_reset_events(timeserie_url: str):
+    events = get_timeserie_events(timeserie_url)
+    events = events.with_columns(pl.lit("").alias("validation_code"))
+    if events.is_empty():
+        logger.info("No events found for timeframe")
+    else:
+        logger.info(events.head())
+        post_timeseries(events, timeserie_url)
+        logger.info(f"Found and adjusted {events.height} events")
+
+
+def retrieve_and_adjust_events(timeserie_url: str, start_date: str, end_date: str):
+    events = get_timeserie_events(timeserie_url, start_date, end_date)
+    events = events.with_columns(pl.lit("V").alias("validation_code"))
+    if events.is_empty():
+        logger.info("No events found for timeframe")
+    else:
+        logger.info(events.head())
+        post_timeseries(events, timeserie_url)
+        logger.info(f"Found and adjusted {events.height} events")
+
+
+def adjust_validation_code_lizard_based_on_bro(
+    organisation_uuid: str,
+    location_code: str,
+    observation_status: Literal[
+        "volledigBeoordeeld", "voorlopig", None, "niet"
+    ] = "volledigBeoordeeld",
+    observation_code: str = "WNS9040",
+) -> None:
+    """
+    Observation status = None -> Controle reeks
+    Observation status = 'volledigBeoordeeld' -> Volledig beoordeeld reguliere reeks
+    Observation status = 'voorlopig' -> Voorlopig reguliere reeks
+    """
+    ls = setup_lizard_session()
+
+    r = ls.get(
+        url="https://vitens.lizard.net/api/v4/locations/",
+        params={
+            "object__type": "filter",
+            "code__startswith": location_code,
+            "organisation__uuid": organisation_uuid,
+            "limit": 25000,
+        },
+    )
+
+    for location in r.json().get("results", []):
+        logger.info(f"Processing location: {location['code']}")
+        bro_id_imbroa = location["extra_metadata"].get("bro", {}).get("gldIdImbroA", None)
+        bro_id_imbro = location["extra_metadata"].get("bro", {}).get("gldIdImbro", None)
+
+        logger.info(
+            f"Processing location {location['code']} with IMBRO/A ID {bro_id_imbroa} and IMBRO ID {bro_id_imbro}"
+        )
+        if bro_id_imbro not in ["", None]:
+            observations_df_imbro = get_observations(bro_id_imbro, observation_status)
+            logger.info(observations_df_imbro)
+        else:
+            observations_df_imbro = None
+
+        if bro_id_imbroa not in ["", None]:
+            observations_df_imbroa = get_observations(bro_id_imbroa, observation_status)
+            logger.info(observations_df_imbroa)
+        else:
+            observations_df_imbroa = None
+
+        timeseries = get_timeseries(location, observation_code=observation_code)
+        for timeserie in timeseries:
+            if observations_df_imbro is not None or observations_df_imbroa is not None:
+                retrieve_reset_events(
+                    timeserie["url"],
                 )
-                continue
 
-            timeserie_info = timeseries[0]
-            logger.info(f"Processing timeseries: {timeserie_info}")
-            procedures = timeserie_info["extra_metadata"].get("bro", {}).get("procedure", [])
-            if not procedures:
-                logger.info(
-                    f"No procedures found for timeseries {timeserie_info['code']}. Skipping."
-                )
-                continue
-            elif isinstance(procedures, dict):
-                procedures = [procedures]
-
-            procedures_df = pl.DataFrame(procedures)
-            procedures_df = procedures_df.with_columns(
-                pl.col("start")
-                .str.to_datetime(format="%Y-%m-%dT%H:%M:%SZ")
-                .alias("start_datetime"),
-                pl.col("eind")
-                .str.replace("None", "5000-01-01T00:00:00Z")
-                .str.to_datetime(format="%Y-%m-%dT%H:%M:%SZ")
-                .alias("eind_datetime"),
-            )
-            logger.info(procedures_df)
-
-            r = ls.get(
-                f"{timeserie_info['url']}events/", params={"validation_code!": "V", "limit": 10000}
-            )
-            r.raise_for_status()
-            events = r.json().get("results", [])
-
-            while r.json().get("next") is not None:
-                r = ls.get(r.json().get("next"))
-                r.raise_for_status()
-                events += r.json().get("results", [])
-
-            events_df = pl.DataFrame(events, schema_overrides={"value": pl.Float64})
-            events_df = events_df.filter(pl.col("value").is_not_null())
-            events_df = events_df.with_columns(
-                pl.col("time").str.to_datetime(format="%Y-%m-%dT%H:%M:%SZ").alias("datetime")
-            )
-
-            for procedure in procedures_df.iter_rows(named=True):
-                logger.info(f"Processing procedure: {procedure}")
-                procedure_events_df = events_df.filter(
-                    pl.col("datetime").is_between(
-                        procedure["start_datetime"],
-                        procedure["eind_datetime"],
-                    ),
-                    pl.col("value").is_not_null(),
-                )
-                logger.info(procedure_events_df)
-
-                n_rows = procedure_events_df.height  # or len(timeseries_df)
-
-                logger.info(procedure)
-                for i in range(0, n_rows, CHUNK_SIZE):
-                    chunk = procedure_events_df.slice(i, CHUNK_SIZE)
-
-                    observatie_type = procedure["observationtype"]
-                    proces_referentie = procedure["processreference"]
-                    evaluatie_procedure = procedure["evaluationprocedure"]
-                    meetinstrument_type = procedure["measurementinstrumenttype"]
-                    luchtdrukcompensatie = (
-                        procedure["airpressurecompensationtype"]
-                        if procedure["airpressurecompensationtype"] not in [None, "geen", ""]
-                        else None
-                    )
-                    logger.info(chunk)
-
-                    metadata = UploadTaskMetadata(
-                        bro_id=gld_id_imbro,
-                        request_reference=f"{gld_id_imbro}: {quality_regime} {observatie_type} {procedure['start']}-{procedure['eind']} ({datetime.datetime.now(tz=AMS_TZ).strftime('%Y-%m-%dT%H:%M:%SZ')})",
-                        delivery_accountable_party=kvk,
-                        quality_regime="IMBRO",
+            if observations_df_imbro is not None:
+                for observation in observations_df_imbro.iter_rows(named=True):
+                    logger.info(observation)
+                    observation = convert_dates(observation)
+                    retrieve_and_adjust_events(
+                        timeserie["url"],
+                        observation["startDate"],
+                        observation["endDate"],
                     )
 
-                    time_value_pairs = setup_time_value_pairs(chunk, limits)
-                    start_time = time_value_pairs[0]["time"]
-                    end_time = time_value_pairs[-1]["time"]
-                    result_time = time_value_pairs[-1]["time"]  # Only do voorlopig and controle
-
-                    sourcedocument_data = GLDAddition(
-                        date=result_time.split("T")[0],
-                        investigator_kvk=kvk,
-                        validation_status="voorlopig"
-                        if observatie_type == "reguliereMeting"
-                        else None,
-                        observation_type=observatie_type,
-                        evaluation_procedure=evaluatie_procedure,
-                        process_reference=proces_referentie,
-                        measurement_instrument_type=meetinstrument_type,
-                        air_pressure_compensation_type=luchtdrukcompensatie,
-                        begin_position=start_time.split("T")[0],
-                        end_position=end_time.split("T")[0],
-                        result_time=result_time,
-                        time_value_pairs=time_value_pairs,
+            if observations_df_imbroa is not None:
+                for observation in observations_df_imbroa.iter_rows(named=True):
+                    logger.info(observation)
+                    observation = convert_dates(observation)
+                    retrieve_and_adjust_events(
+                        timeserie["url"],
+                        observation["startDate"],
+                        observation["endDate"],
                     )
-
-                    payload = UploadTask(
-                        bro_domain="GLD",
-                        project_number=str(projectnummer),
-                        registration_type="GLD_Addition",
-                        request_type="registration",
-                        sourcedocument_data=sourcedocument_data,
-                        metadata=metadata,
-                    )
-
-                    # Create delivery
-                    try:
-                        result_dict: dict = create_brostar_task(
-                            url=f"{brostar.website}/uploadtasks/",
-                            payload=payload.model_dump(mode="json", by_alias=True),
-                            brostar_s=brostar.s,
-                        )
-                    except Exception as e:
-                        logger.exception(
-                            f"Failed to post addition: {e}. Payload was: {payload.model_dump(mode='json', by_alias=True)}"
-                        )
-                        continue
-
-                    # Check delivery
-                    retry = 0
-                    while (
-                        result_dict.get("status", "UNKNOWN") in ["PROCESSING", "PENDING"]
-                        and retry < 5
-                    ):
-                        try:
-                            result_dict = check_status(result_dict["url"], brostar_s=brostar.s)
-                        except Exception as e:
-                            logger.exception(f"Failed to check the status at brostar: {e}.")
-
-                        retry += 1
-                        time.sleep(5)
-
-                    # Update last delivered date
-                    if result_dict["status"] in ["COMPLETED", "UNFINISHED"]:
-                        url = timeserie_info["url"]
-                        chunk = chunk.with_columns(pl.lit("V").alias("validation_code"))
-                        # Convert datetime to str (JSON-Serializeable)
-                        chunk = chunk.select(
-                            "time",
-                            "value",
-                            "validation_code",
-                            "detection_limit",
-                            "flag",
-                            "comment",
-                            "last_modified",
-                        )
-                        post_timeseries_events(url, chunk, ls)
 
 
 def map_polars_to_gmw_constructions(df: pl.DataFrame, kvk: str) -> GMWConstruction:
@@ -583,7 +512,7 @@ def bulk_gmw_correction_request(kvk: str) -> None:
         results += r.json().get("results", [])
         next = r.json().get("next")
 
-    print(results)
+    logger.info(results)
     df = pl.DataFrame(results, schema_overrides={"nitg_code": pl.String})
     df = df.filter(pl.col("nitg_code").is_not_null())
     df = df.select("uuid", "bro_id", "nitg_code")
@@ -620,68 +549,21 @@ def bulk_gmw_correction_request(kvk: str) -> None:
 
 def retry_upload_task() -> None:
     """Retry all upload tasks that are in PROCESSING state."""
-    import re
-
     brostar_api_key = os.getenv("BROSTAR_API_KEY")
     brostar = BROSTARConnection(brostar_api_key)  # BROSTAR API Key
     brostar.set_website(production=True)
 
-    r = brostar.get("uploadtasks", params={"status": "FAILED"})
+    r = brostar.get("uploadtasks", params={"status": "PROCESSING"})
     for task in r.json().get("results", []):
         uuid = task["uuid"]
         logger.info(f"Retrying upload task {uuid}")
 
-        if "mag niet voor de laatst geregistreerde gebeurtenis" in task["bro_errors"]:
-            metadata = task["metadata"]
-            metadata["correctionReason"] = "eigenCorrectie"
-            retry_r = brostar.s.patch(
-                url=f"{brostar.website}/uploadtasks/{uuid}/", json={"metadata": metadata}
-            )
-            retry_r.raise_for_status()
-
-            metadata["request_type"] = "insert"
-            retry_r = brostar.s.patch(
-                url=f"{brostar.website}/uploadtasks/{uuid}/", json={"metadata": metadata}
-            )
-            retry_r.raise_for_status()
-
-        if "moet liggen na of op de inrichtingsdatum" in task["bro_errors"]:
-            # Extract all dates in YYYY-MM-DD format
-            dates = re.findall(r"\d{4}-\d{2}-\d{2}", task["bro_errors"])
-
-            if len(dates) >= 2:
-                second_date = dates[1]  # The inrichtingsdatum
-                sourcedocument_data = task["sourcedocument_data"]
-                sourcedocument_data["eventDate"] = second_date
-
-                retry_r = brostar.s.patch(
-                    url=f"{brostar.website}/uploadtasks/{uuid}/",
-                    json={"sourcedocument_data": sourcedocument_data},
-                )
-                retry_r.raise_for_status()
-
-        if (
-            "Dit brondocument is al eerder via het bronhouderportaal aangeleverd aan de BRO"
-            in task["bro_errors"]
-        ):
-            retry_r = brostar.s.patch(
-                url=f"{brostar.website}/uploadtasks/{uuid}/", json={"status": "COMPLETED"}
-            )
-            retry_r.raise_for_status()
-
-            retry_r = brostar.s.patch(
-                url=f"{brostar.website}/uploadtasks/{uuid}/", json={"progress": 100.0}
-            )
-            retry_r.raise_for_status()
-
-            retry_r = brostar.s.patch(
-                url=f"{brostar.website}/uploadtasks/{uuid}/", json={"log": ""}
-            )
-            retry_r.raise_for_status()
-            continue
-
-        # retry_r = brostar.s.patch(url=f"{brostar.website}/uploadtasks/{uuid}/", json={"status": "PENDING"})
-        # retry_r.raise_for_status()
+        retry_r = brostar.s.patch(
+            url=f"{brostar.website}/uploadtasks/{uuid}/", json={"status": "PENDING"}, timeout=30
+        )
+        logger.info(retry_r)
+        logger.info(retry_r.content)
+        retry_r.raise_for_status()
 
 
 def bulk_gmw_construction_request(excel_file: str | Path, kvk: str) -> None:
@@ -715,7 +597,7 @@ def bulk_gmw_construction_request(excel_file: str | Path, kvk: str) -> None:
             metadata=metadata,
         )
         payload = payload.model_dump(mode="json", by_alias=True)
-        print(payload)
+        logger.info(payload)
         r = brostar.post_upload(payload=payload, is_json=True)
         r.raise_for_status()
 
@@ -777,6 +659,7 @@ def deliver_gld_start_registration(
     delivery_accountable_party: str,
     monitoring_nets: list[str],
     project_number: str,
+    quality_regime: Literal["IMBRO", "IMBRO/A"],
 ) -> str | None:
     """Send a gld start registration request that corrects the dates."""
 
@@ -790,9 +673,9 @@ def deliver_gld_start_registration(
         "objectIdAccountableParty": internal_id,
     }
     metadata = UploadTaskMetadata(
-        request_reference="MeetnettenVitens-BROSTAR",
+        request_reference=f"{internal_id}-{quality_regime}",
         delivery_accountable_party=delivery_accountable_party,
-        quality_regime="IMBRO",
+        quality_regime=quality_regime,
     )
 
     payload = UploadTask(
@@ -804,6 +687,51 @@ def deliver_gld_start_registration(
         metadata=metadata,
     )
     payload = payload.model_dump(mode="json", by_alias=True)
+    r = brostar.post_upload(payload)
+    logger.info(r.json())
+    r.raise_for_status()
+
+    uuid: str = r.json()["uuid"]
+    r = brostar.await_completed(uuid=uuid)
+    return r.json().get("broId")
+
+
+def deliver_frd_start_registration(
+    internal_id: str,
+    bro_id: str,
+    tube_number: int,
+    delivery_accountable_party: str,
+    monitoring_nets: list[str],
+    project_number: str,
+    quality_regime: Literal["IMBRO", "IMBRO/A"],
+) -> str | None:
+    """Send a gld start registration request that corrects the dates."""
+
+    brostar_api_key = os.getenv("BROSTAR_API_KEY")
+    brostar = BROSTARConnection(brostar_api_key)
+    brostar.set_website(production=True)
+    sourcedocument_data = {
+        "gmwBroId": bro_id,
+        "tubeNumber": tube_number,
+        "groundwaterMonitoringNets": monitoring_nets,
+        "objectIdAccountableParty": internal_id,
+    }
+    metadata = UploadTaskMetadata(
+        request_reference=f"{internal_id}-{quality_regime}",
+        delivery_accountable_party=delivery_accountable_party,
+        quality_regime=quality_regime,
+    )
+
+    payload = UploadTask(
+        bro_domain="FRD",
+        project_number=str(project_number),
+        registration_type="FRD_StartRegistration",
+        request_type="registration",
+        sourcedocument_data=sourcedocument_data,
+        metadata=metadata,
+    )
+    payload = payload.model_dump(mode="json", by_alias=True)
+    print(payload)
     r = brostar.post_upload(payload)
     logger.info(r.json())
     r.raise_for_status()
@@ -824,9 +752,132 @@ def clear_fields_for_upload(upload_task: dict) -> dict:
     return upload_task
 
 
+def is_gld_id(bro_id: str | None) -> bool:
+    """Check if a string is a valid BRO ID. GLD000000091284"""
+    if bro_id is None:
+        logger.warning("BRO ID is None.")
+        return False
+    if bro_id.startswith("GLD") and len(bro_id) == 15:
+        logger.info(f"BRO ID is correct: {bro_id}.")
+        return True
+
+    logger.warning(f"BRO ID is incorrect: {bro_id}.")
+    return False
+
+
+def get_pdok_attributes(bro_id: str, attributes: list[str]) -> dict[str, str]:
+    """Retrieve the specified attributes from PDOK for a given BRO ID."""
+    r = requests.get(
+        f"https://api.pdok.nl/bzk/bro-gminsamenhang-karakteristieken/ogc/v1/collections/gm_gld/items?f=json&bro_id={bro_id}",
+        timeout=30,
+    )
+    r.raise_for_status()
+    data = r.json()
+    attributes_data = data.get("features", [])[0].get("properties", {})
+    if not attributes_data:
+        raise ValueError(f"Attributes not found for BRO ID: {bro_id}")
+
+    logger.info(f"Attributes for {bro_id} are {attributes_data}.")
+    return {attr: attributes_data.get(attr) for attr in attributes}
+
+
+class GLDCorrecter:
+    def __init__(self, bro_id: str | None = None) -> None:
+        brostar_api_key = os.getenv("BROSTAR_API_KEY")
+        brostar = BROSTARConnection(brostar_api_key)  # BROSTAR API Key
+        brostar.set_website(production=True)
+        self.brostar = brostar
+        self.set_bro_id(bro_id)
+
+    def set_bro_id(self, bro_id: str) -> None:
+        if not is_gld_id(bro_id):
+            raise ValueError(f"Invalid GLD BRO ID: {bro_id}")
+
+        self.bro_id = bro_id
+        attributes = get_pdok_attributes(bro_id, ["delivery_accountable_party", "quality_regime"])
+        self.delivery_accountable_party = attributes.get("delivery_accountable_party", "")
+        self.quality_regime = attributes.get("quality_regime", "")
+
+    def set_project_number(self, project_number: str) -> None:
+        self.project_number = project_number
+
+    def delete_observations(
+        self, start_date: datetime | None = None, lower_then: bool = False
+    ) -> None:
+        if self.bro_id is None:
+            raise ValueError("BRO ID is not set.")
+
+        r = requests.get(
+            f"https://publiek.broservices.nl/gm/gld/v1/objects/{self.bro_id}/observationsSummary",
+            timeout=30,
+        )
+        if len(r.json()) == 0:
+            logger.info(f"No observations found for {self.bro_id}.")
+            return
+
+        observations = pl.DataFrame(r.json())
+        observations = observations.with_columns(
+            pl.col("startDate").str.strptime(pl.Datetime, format="%d-%m-%Y").alias("startDate"),
+            pl.col("endDate").str.strptime(pl.Datetime, format="%d-%m-%Y").alias("endDate"),
+        )
+        if start_date is not None and lower_then:
+            observations = observations.filter(pl.col("startDate") <= start_date)
+        elif start_date is not None and not lower_then:
+            observations = observations.filter(pl.col("startDate") >= start_date)
+
+        if len(observations) == 0:
+            logger.info(f"No observations found for {self.bro_id} with startDate {start_date}.")
+            return
+
+        logger.info(
+            f"Found {len(observations)} observations for {self.bro_id} with startDate {start_date}."
+        )
+
+        for row in observations.iter_rows(named=True):
+            logger.info(f"{row['observationId']} - {row['startDate']}")
+
+            source_doc_data = DeleteGLDAddition(
+                observation_id=row["observationId"],
+                observation_process_id=row["observationProcessId"],
+                observation_status=row["observationStatus"],
+                begin_position=row["startDate"],
+                end_position=row["endDate"],
+                observation_type=row["observationType"],
+                time_value_pairs=[
+                    {"time": "1900-01-01T00:00:00Z", "value": 0}
+                ],  # Empty time value pairs for deletion
+            )
+            source_doc_data.result_time = datetime.now(tz=AMS_TZ).strftime("%Y-%m-%dT%H:%M:%SZ")
+            source_doc_data.date = datetime.now(tz=AMS_TZ).strftime("%Y-%m-%d")
+
+            payload = UploadTask(
+                bro_domain="GLD",
+                project_number=self.project_number,
+                registration_type="GLD_Addition",
+                request_type="delete",
+                metadata=UploadTaskMetadata(
+                    request_reference=f"Delete_{self.bro_id}_{row['observationId']}_{datetime.now(tz=AMS_TZ).strftime('%Y-%m-%dT%H:%M:%SZ')}",
+                    delivery_accountable_party=self.delivery_accountable_party,  # Adjust as needed
+                    quality_regime=self.quality_regime,
+                    bro_id=self.bro_id,
+                    correction_reason="eigenCorrectie",
+                ),
+                sourcedocument_data=source_doc_data,
+            )
+
+            r = self.brostar.post_upload(
+                payload=payload.model_dump(mode="json", by_alias=True), is_json=True
+            )
+            print(r.content)
+            print(r.status_code)
+            r.raise_for_status()
+
+            uuid: str = r.json()["uuid"]
+            self.brostar.await_completed(uuid=uuid)
+
+
 def correct_gld_dossier_for_observation_request(
     current_id: str,
-    target_id: str,
 ):
     brostar_api_key = os.getenv("BROSTAR_API_KEY")
     brostar = BROSTARConnection(brostar_api_key)  # BROSTAR API Key
@@ -845,17 +896,7 @@ def correct_gld_dossier_for_observation_request(
         result = clear_fields_for_upload(result)
         result["request_type"] = "delete"
         result["metadata"].update({"correctionReason": "eigenCorrectie"})
-        r = brostar.post_upload(payload=result, is_json=True)
-        r.raise_for_status()
-
-        uuid: str = r.json()["uuid"]
-        brostar.await_completed(uuid=uuid)
-
-        result["request_type"] = "registration"
-        result["metadata"]["requestReference"].replace(current_id, target_id)
-        result["metadata"]["broId"] = target_id
-        result["metadata"].pop("correctionReason")
-        result["status"] = "PENDING"
+        logger.info(result)
         r = brostar.post_upload(payload=result, is_json=True)
         r.raise_for_status()
 
@@ -867,59 +908,180 @@ def convert_to_list(s):
     return ast.literal_eval(s)
 
 
-def correct_bulk_gld(excel_file: str | Path) -> None:
-    df = pl.read_excel(excel_file, has_header=True)
-    df_converted = df.with_columns(
-        pl.col("broId").map_elements(convert_to_list, return_dtype=pl.List(pl.String))
+def handle_errors(brostar, task):
+    import re
+
+    errors = eval(task.get("bro_errors", "[]"))
+    print("BRO errors:", errors)
+
+    if not errors:
+        return
+
+    # Use the error message containing the difference
+    error_text = None
+    for e in errors:
+        if "het verschil in Inkorten.monitoringbuis.positie bovenkant buis" in e:
+            error_text = e
+            break
+
+    if not error_text:
+        print("No matching error found for automatic correction.")
+        return
+
+    print(error_text)
+    # Regex to extract tubeTopPosition and plainTubePartLength
+    tube_top_match = re.search(
+        r"\(Shortening\.monitoringTube\.tubeTopPosition\) = (-?[0-9.]+)", error_text
     )
-    # Extract first value as 'correct_id' and explode the rest as 'target_id'
-    result = (
-        df_converted.with_columns(
-            [
-                pl.col("broId").list.first().alias("target_id"),
-                pl.col("broId").list.slice(1).alias("current_ids"),
-            ]
+    plain_tube_match = re.search(
+        r"\(Shortening\.monitoringTube\.monitoringTube\.plainTubePartLength\) = (-?[0-9.]+)",
+        error_text,
+    )
+
+    if tube_top_match and plain_tube_match:
+        tube_top = float(tube_top_match.group(1))
+        plain_tube = float(plain_tube_match.group(1))
+        print("tubeTopPosition:", tube_top)
+        print("plainTubePartLength:", plain_tube)
+
+        difference = tube_top - plain_tube
+        print("Difference (tubeTopPosition - plainTubePartLength):", difference)
+
+        # Calculate correction
+        correction = round(difference, 3)
+        print(f"Adjusting plain tube part length by {correction}")
+
+        # Adjust in sourcedocument_data
+        sourcedocument_data = task.get("sourcedocument_data", {})
+        if (
+            "monitoringTubes" in sourcedocument_data
+            and len(sourcedocument_data["monitoringTubes"]) > 0
+        ):
+            sourcedocument_data["monitoringTubes"][0]["plainTubePartLength"] -= correction
+
+            # Patch the task
+            patch_data = {
+                "sourcedocument_data": sourcedocument_data,
+                "status": "PENDING",
+            }
+            patch_resp = brostar.s.patch(task["url"], json=patch_data)
+            print("Patch response:", patch_resp.status_code, patch_resp.text)
+        else:
+            print("No monitoringTubes found to adjust.")
+    else:
+        print("Could not parse error for automatic correction.")
+
+
+def check_status_processing_upload_tasks() -> None:
+    """Delete all upload tasks that are in PROCESSING state."""
+    brostar_api_key = os.getenv("BROSTAR_API_KEY")
+    brostar = BROSTARConnection(brostar_api_key)  # BROSTAR API Key
+    brostar.set_website(production=True)
+    r = brostar.get("uploadtasks", params={"status": "UNFINISHED"})
+    next = r.url
+    while next is not None:
+        r = brostar.s.get(next)
+        print(r.url)
+        print(r.content)
+        r.raise_for_status()
+        tasks = r.json()["results"]
+        for task in tasks:
+            # res = brostar.s.patch(task["url"], json={"status": "PENDING"}, timeout=30)
+            res = brostar.s.post(task["url"] + "check_status/", json={}, timeout=30)
+            print(res.url)
+            print(res.status_code, res.content)
+
+        next = r.json().get("next")
+
+
+def fix_upload_tasks() -> None:
+    """Delete all upload tasks that are in PROCESSING state."""
+    brostar_api_key = os.getenv("BROSTAR_API_KEY")
+    brostar = BROSTARConnection(brostar_api_key)  # BROSTAR API Key
+    brostar.set_website(production=True)
+
+    r = brostar.get("uploadtasks", params={"status": "FAILED", "registration_type": "GLD_Addition"})
+    next = r.url
+    total_tasks = []
+    while next is not None:
+        r = brostar.s.get(next)
+        r.raise_for_status()
+        tasks = r.json()["results"]
+        total_tasks += tasks
+
+        next = r.json().get("next")
+
+    df = pl.DataFrame(total_tasks)
+    df = df.with_columns(
+        pl.col("metadata").struct.field("requestReference").alias("reference"),
+    )
+
+    df = df.sort("reference")
+
+    logger.info(df.head())
+    old_reference = ""
+    for task in df.iter_rows(named=True):
+        logger.info(f"handling task {task['uuid']} with reference {task['reference']}")
+        current_reference = task["reference"]
+        if current_reference == old_reference:
+            logger.info(
+                f"deleting duplicate task {task['uuid']} with reference {current_reference}"
+            )
+            brostar.s.delete(url=f"{brostar.website}/uploadtasks/{task['uuid']}/", timeout=30)
+            continue
+
+        r = brostar.s.get(f"{brostar.website}/uploadtasks/{task['uuid']}/", timeout=30)
+        r.raise_for_status()
+
+        sourcedocument_data = r.json()["sourcedocument_data"]
+        sourcedocument_data.pop("airPressureCompensationType")
+
+        brostar.s.patch(
+            url=f"{brostar.website}/uploadtasks/{task['uuid']}/",
+            json={
+                "status": "PENDING",
+                "progress": 0,
+                "log": "",
+                "sourcedocument_data": sourcedocument_data,
+                "bro_errors": "",
+            },
         )
-        .drop("broId")
-        .explode("current_ids")
-        .rename({"current_ids": "current_id"})
-    )
-    total = result.height
+
+        old_reference = current_reference
+
+
+def correct_bulk_gld(csv_file: str | Path) -> None:
+    df = pl.read_csv(csv_file, has_header=True, separator=";")
+
+    total = df.height
     logger.info(f"Total rows to process: {total}")
     skip_count = 0
-    delete_ids = []
-    for i, row in enumerate(result.iter_rows(named=True)):
+    for i, row in enumerate(df.iter_rows(named=True)):
         logger.info(f"Processing row {i + 1}/{total}: {row}")
+        if i + 1 < 54:
+            logger.info(f"Skipping row {i + 1} as per condition.")
+            continue
+
         r = requests.get(
-            f"https://publiek.broservices.nl/gm/gld/v1/objects/{row['current_id']}/observationsSummary"
+            f"https://publiek.broservices.nl/gm/gld/v1/objects/{row['gld']}/observationsSummary",
+            timeout=30,
         )
         if len(r.json()) == 0:
             skip_count += 1
-            logger.info(f"No observations found for {row['current_id']}. Skipping.")
-            delete_ids += [row["current_id"]]
+            logger.info(f"No observations found for {row['tube']}. Skipping.")
             continue
 
         correct_gld_dossier_for_observation_request(
-            current_id=row["current_id"],
-            target_id=row["target_id"],
+            current_id=row["gld"],
         )
         logger.info(f"Completed processing row {i + 1}/{total}")
-        delete_ids += [row["current_id"]]
 
-    print(f"Skipped {skip_count} rows due to no observations found.")
-
-    # Write to a CSV file
-    with open(
-        r"C:\Users\steven.hosper\Downloads\delete_ids.csv", mode="w", newline="", encoding="utf-8"
-    ) as file:
-        writer = csv.writer(file)
-        writer.writerow(["broId"])  # Header
-        for bro_id in delete_ids:
-            writer.writerow([bro_id])
+    logger.info(f"Skipped {skip_count} rows due to no observations found.")
 
 
 def create_bulk_gld(excel_file: str | Path) -> None:
     df = pl.read_excel(excel_file, has_header=True)
+    df.drop_in_place("bro_id")
     brostar_api_key = os.getenv("BROSTAR_API_KEY")
     brostar = BROSTARConnection(brostar_api_key)
     brostar.set_website(production=True)
@@ -944,34 +1106,47 @@ def create_bulk_gld(excel_file: str | Path) -> None:
         "bro_id",
         "business_id",
     )
-    print(df2)
+    logger.info(df2)
 
     df = df.join(df2, left_on="objectIdAccountableParty", right_on="business_id", how="left")
-    print(df)
+    logger.info(df)
 
     bro_ids = []
+    count = 0
     for _i, row in enumerate(df.iter_rows(named=True)):
         if row["groundwaterMonitoringNets"] is None:
+            logger.info(f"Skipping row {_i + 1} due to missing groundwaterMonitoringNets.")
             bro_ids.append(None)
             continue
 
-        bro_id = deliver_gld_start_registration(
-            internal_id=row["objectIdAccountableParty"],
-            bro_id=row["gmwBroId"],
-            tube_number=row["tubeNumber"],
-            delivery_accountable_party=str(row["deliveryAccountableParty"]),
-            monitoring_nets=row["groundwaterMonitoringNets"],
-            project_number=row["projectNumber"],
-        )
+        if row["bro_id"] is not None and row["bro_id"] != "":
+            bro_ids.append(row["bro_id"])
+            logger.info(
+                f"Skipping existing BRO ID for {row['objectIdAccountableParty']}: {row['bro_id']}"
+            )
+            continue
+
+        count += 1
+        logger.info(f"Processing row {_i + 1}: {row}")
+        bro_id = None
+        # bro_id = deliver_gld_start_registration(
+        #     internal_id=row["objectIdAccountableParty"],
+        #     bro_id=row["gmwBroId"],
+        #     tube_number=row["tubeNumber"],
+        #     delivery_accountable_party=str(row["deliveryAccountableParty"]),
+        #     monitoring_nets=row["groundwaterMonitoringNets"],
+        #     project_number=row["projectNumber"],
+        # )
         bro_ids.append(bro_id)
         logger.info(bro_id)
 
     # Save to new Excel file with "v2" suffix
-    new_filename = excel_file.replace(".xlsx", "_v2.xlsx")
+    new_filename = excel_file.replace("_v2.xlsx", "_v3.xlsx")
     df = df.with_columns(pl.Series("broId", bro_ids))
     df.write_excel(new_filename)
 
     logger.info(f"Saved updated DataFrame to {new_filename}")
+    logger.info(f"Total new BRO IDs created: {count}")
 
 
 def process_result(result: dict) -> None:
@@ -1010,11 +1185,11 @@ def process_result(result: dict) -> None:
         url=r.json()["results"][0]["url"], json={"extra_metadata": extra_metadata}, timeout=15
     )
     r.raise_for_status()
-    print(r.json())
-    print("\n\n")
+    logger.info(r.json())
+    logger.info("\n\n")
 
 
-def gld_to_lizard(location_code: str, gld_id: str) -> None:
+def gld_to_lizard(location_code: str, gld_id_imbro: str, gld_id_imbroa: str) -> None:
     lizard_api_key = os.getenv("LIZARD_API_KEY")
     lizard_s = requests.Session()
     lizard_s.headers = {
@@ -1036,15 +1211,22 @@ def gld_to_lizard(location_code: str, gld_id: str) -> None:
 
     extra_metadata = r.json()["results"][0]["extra_metadata"]
 
-    extra_metadata["bro"]["broid_gld_imbro"] = gld_id
+    if extra_metadata["bro"]["broid_gld_imbro"] in [None, "", "NULL"]:
+        extra_metadata["bro"]["broid_gld_imbro"] = gld_id_imbro if gld_id_imbro != "NULL" else None
+
+    if extra_metadata["bro"]["broid_gld_imbroa"] in [None, "", "NULL"]:
+        extra_metadata["bro"]["broid_gld_imbroa"] = (
+            gld_id_imbroa if gld_id_imbroa != "NULL" else None
+        )
+
     logger.info(extra_metadata["bro"])
 
     r = lizard_s.patch(
         url=r.json()["results"][0]["url"], json={"extra_metadata": extra_metadata}, timeout=15
     )
     r.raise_for_status()
-    print(r.json())
-    print("\n\n")
+    logger.info(r.json())
+    logger.info("\n\n")
 
 
 def ingest_gld_ids_into_lizard():
