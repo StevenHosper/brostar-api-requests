@@ -1,14 +1,15 @@
 import datetime
 import logging
+import os
 
 import polars as pl
 import requests
 
 from brostar_api_requests.brostar_api_requests import (
-    check_status_processing_upload_tasks,
     deliver_frd_start_registration,
     setup_lizard_session,
 )
+from brostar_api_requests.connection import BROSTARConnection
 
 logger = logging.getLogger(__name__)
 
@@ -339,6 +340,207 @@ def check_bro_ids():
     df_info.write_csv("gld_addition_bro_check_fixed3.csv")
 
 
+def main():
+    # business_main()
+    from src.brostar_api_requests.connection import BROSTARConnection
+
+    brostar = BROSTARConnection()
+    brostar.set_website(production=False)
+    brostar.s.headers.update(
+        {
+            "Authorization": "Bearer eyJraWQiOiJPN2xjQVFNM2JBT0R0RDRLVXIrMER0QjZCaFlyT0ViVG4zK1lWa1wvNzdURT0iLCJhbGciOiJSUzI1NiJ9.eyJzdWIiOiI2bGZuaGttOXQwN3FsMHNuaGxxMzJlYmRucSIsInRva2VuX3VzZSI6ImFjY2VzcyIsInNjb3BlIjoic3RhZ2luZy5icm9zdGFyLm5sXC8qOnJlYWR3cml0ZSIsImF1dGhfdGltZSI6MTc2NTQ2MTc4NiwiaXNzIjoiaHR0cHM6XC9cL2NvZ25pdG8taWRwLmV1LXdlc3QtMS5hbWF6b25hd3MuY29tXC9ldS13ZXN0LTFfdlB3WE9uTmJpIiwiZXhwIjoxNzY1NDY1Mzg2LCJpYXQiOjE3NjU0NjE3ODYsInZlcnNpb24iOjIsImp0aSI6ImZkYmQwZGMxLWRmMTAtNDYxYS1iYzg2LTJhNzVhZTcwNjM5OSIsImNsaWVudF9pZCI6IjZsZm5oa205dDA3cWwwc25obHEzMmViZG5xIn0.LclwZOtOTHXhX5vVXeFv7yBF_NsFQdRNcNo_5Uckx1ehadBOkqIryKRU4hQdZ80wL_7ye5_wXATyq7yLag1ML4xbqf9mALQxakEeDe8ZPCfB7eAE5ZpfHzpjhf-FOHHdeXlDAFMVNBIcNZ0bv3nKIXOOO8dbSB6o2Ta56VQZmT3PQlqMpxONtqkqBUmfc4TkOH_s3WcJQ5myRl6bPPZNU-wYw6lieqgGJVzheQ_NhDQiTtzzbZJN3Eg1ruMCtLpsihbyQ4ys3x-3PbAQuIN9T-HYnFt2u3S7zgofZaWwi2ynWyroonNxlp9lVc1i6zUt9gTNGB8yDC3JbM3hrKyvDw"
+        }
+    )
+    # brostar.refresh_access_token("6lfnhkm9t07ql0snhlq32ebdnq", "1s1e10bm1opaknceq6u90dkusdpgls8jogb8s81kilu0pc7p119a")
+    logger.info(brostar.s.headers)
+    logger.info(brostar.check_token_validity())
+
+    r = brostar.s.get("https://staging.brostar.nl/api/uploadtasks/")
+    logger.info(r.json())
+
+
+def ingest_dino_csv(filepath: str):
+    ls = setup_lizard_session()
+
+    df = pl.read_csv(filepath, separator=";", has_header=True, truncate_ragged_lines=True)
+    print(df.columns)
+    gws_name = df.item(0, 0)
+    filternummer = df.item(0, 1)
+
+    df = df.select(
+        ["Peildatum", "Peiltijdstip", "Stand tov NAP", "Onbetrouwbaar", "Meetinstrument"]
+    )
+
+    valid_values = {"Betrouwbaar", "Onbetrouwbaar"}
+    unique_values = set(df.select("Onbetrouwbaar").to_series().unique().to_list())
+
+    # Check if all values are valid
+    if unique_values.issubset(valid_values):
+        df = df.with_columns(
+            pl.when(pl.col("Onbetrouwbaar").eq("Betrouwbaar")).then(0).otherwise(7).alias("flag"),
+        )
+    else:
+        raise ValueError(
+            f"Invalid values found in 'Onbetrouwbaar' column. Expected 'Betrouwbaar' or 'Onbetrouwbaar'. Found: {df.select('Onbetrouwbaar').to_series().unique().to_list()}"
+        )
+
+    # For items that do not have time, set time to 12:00:00
+    # Then create a datetime column
+    df = df.with_columns(
+        pl.when(pl.col("Peiltijdstip").is_null())
+        .then(pl.lit("12:00:00"))
+        .otherwise(pl.col("Peiltijdstip"))
+        .alias("Peiltijdstip_filled"),
+    )
+    df = df.with_columns(
+        (pl.col("Peildatum") + "T" + pl.col("Peiltijdstip_filled") + "Z").alias("time"),
+        (pl.col("Stand tov NAP") / 100).alias("value"),
+    )
+    df = df.with_columns(
+        (pl.col("time").str.strptime(pl.Datetime, format="%Y-%m-%dT%H:%M:%SZ"))
+        .dt.replace_time_zone("UTC", ambiguous="earliest")
+        .alias("datetime"),
+    )
+    print(df.head())
+
+    r = ls.get(f"https://vitens.lizard.net/api/v4/groundwaterstations/?name={gws_name}")
+    gws = r.json().get("results", [])[0]
+    for filter in gws.get("filters", []):
+        if filter["code"].endswith(str(filternummer)):
+            for timeserie_url in filter.get("timeseries", []):
+                r = ls.get(timeserie_url)
+                r.raise_for_status()
+
+                timeserie = r.json()
+                start = datetime.datetime.strptime(
+                    timeserie["start"]
+                    if timeserie["start"] is not None
+                    else "2025-01-01T00:00:00Z",
+                    "%Y-%m-%dT%H:%M:%SZ",
+                ).replace(tzinfo=datetime.UTC)
+                if timeserie["observation_type"]["code"] == "WNS9040":
+                    df_logger = df.filter(pl.col("datetime") <= start).filter(
+                        pl.col("Meetinstrument") == "Diver"
+                    )
+                    df_logger = df_logger.select(["time", "value", "flag"])
+                    print(
+                        f"Groundwater station: {gws_name}, filter number: {filternummer} (logger)"
+                    )
+                    print(df_logger.head(5))
+                    ls.post(timeserie["url"] + "events/", json=df_logger.to_dicts())
+
+                elif timeserie["observation_type"]["code"] == "WNS9040.hand":
+                    df_logger = df.filter(pl.col("datetime") <= start).filter(
+                        pl.col("Meetinstrument").is_null()
+                    )
+                    df_logger = df_logger.select(["time", "value", "flag"])
+                    print(
+                        f"Groundwater station: {gws_name}, filter number: {filternummer} (manual)"
+                    )
+                    print(df_logger.head(5))
+                    ls.post(timeserie["url"] + "events/", json=df_logger.to_dicts())
+
+
+def get_gmw_id_tube_nr(gld_id: str, brostar: BROSTARConnection):
+    r = brostar.get("gld/glds", params={"bro_id": gld_id})
+    r.raise_for_status()
+    results = r.json().get("results", [])
+    if len(results) == 0:
+        logger.warning(f"No GLD found for GLD ID {gld_id}.")
+        return None, None
+
+    gmw_bro_id = results[0].get("gmw_bro_id", None)
+    tube_number = results[0].get("tube_number", None)
+    return gmw_bro_id, tube_number
+
+
+def add_gmw_check_procedures():
+    df = pl.read_csv("20251215_Rotterdam.csv")
+
+    brostar_api_key = os.getenv("BROSTAR_API_KEY")
+    brostar = BROSTARConnection(brostar_api_key)
+    brostar.set_website(production=True)
+
+    ls = setup_lizard_session()
+    info = []
+    for row in df.iter_rows(named=True):
+        gmw_id, tube_number = get_gmw_id_tube_nr(row["broId"], brostar)
+
+        # get procedures from timeserie
+        r = ls.get(
+            f"https://rotterdam.lizard.net/api/v4/timeseries/?location__code={gmw_id}-{str(tube_number).zfill(3)}&observation_type__code=WNS9040.hand"
+        )
+        r.raise_for_status()
+        logger.info(r.url)
+        logger.info(r.json())
+        timeseries = r.json().get("results", [])
+        if len(timeseries) == 0:
+            logger.warning(f"No timeserie found for GMW ID {gmw_id} and tube number {tube_number}.")
+            continue
+
+        metadata = timeseries[0].get("extra_metadata", {}).get("bro", {})
+        # bool check if a controle measurement is present in
+        controle = any([proc.get("observationtype", "") == "controlemeting" for proc in metadata])
+        logger.info(
+            f"Procedures for {gmw_id}-{tube_number}: {metadata}, controlemeting present: {controle}"
+        )
+        info.append(
+            {
+                "broId": row["broId"],
+                "gmw_bro_id": gmw_id,
+                "tube_number": tube_number,
+                "observationId": row["observationId"],
+                "measurements_count": row["tvpCount"],
+                "procedures": str(metadata),
+                "controlemeting_present": controle,
+            }
+        )
+
+    df_info = pl.DataFrame(info)
+    df_info.write_csv("20251215_Rotterdam_procedures_check.csv")
+
+
+def delete_and_adjust_rotterdam():
+    df = pl.read_csv("20251215_Rotterdam_procedures_check.csv", separator=";")
+
+    from src.brostar_api_requests.brostar_api_requests import GLDCorrecter
+
+    correct = GLDCorrecter()
+
+    for row in df.iter_rows(named=True):
+        correct.set_bro_id(row["broId"])
+        correct.set_project_number("5544")
+        correct.delete_observation(row["observationId"])
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    check_status_processing_upload_tasks()
+    delete_and_adjust_rotterdam()
+    # from src.brostar_api_requests.brostar_api_requests import bulk_gmw_construction_request
+    # bulk_gmw_construction_request(excel_file=r"C:\Users\steven.hosper\Desktop\PythonPackages\BrostarAPI\input\20251212_hendrik_test_out.xlsx", kvk="51640813")
+
+    # For every file in the input folder (/input), with extension .csv, ingest the file
+    # import os
+    # input_folder = "input"
+    # for filename in os.listdir(input_folder):
+    #     if filename.endswith(".csv"):
+    #         filepath = os.path.join(input_folder, filename)
+    #         print(f"Ingesting file: {filepath}")
+    #         ingest_dino_csv(filepath)
+
+    # main()
+    # check_status_processing_upload_tasks()
+
+    # from src.brostar_api_requests.brostar_api_requests import ingest_gld_ids_into_lizard
+    # ingest_gld_ids_into_lizard()
+
+    # from src.brostar_api_requests.data_retriever.bro_xml_reader import GARXML
+    # from src.brostar_api_requests.gar_requests import correct_gar_tube
+
+    # gars_to_correct1 = ["GAR000000041890", "GAR000000041948", "GAR000000041990", "GAR000000042046", "GAR000000042060", "GAR000000042100", "GAR000000042101"]
+    # gars_to_correct2 = ["GAR000000041983"]
+    # for gar in gars_to_correct1:
+    #     correct_gar_tube(bro_id=gar, gmw_id="GMW000000079662", tube_number=1, correctie_reden="eigenCorrectie", projectnummer="5459")
+
+    # for gar in gars_to_correct2:
+    #     correct_gar_tube(bro_id=gar, gmw_id="GMW000000079662", tube_number=2, correctie_reden="eigenCorrectie", projectnummer="5459")

@@ -18,6 +18,7 @@ from .upload_models import (
     DeleteGLDAddition,
     GMWConstruction,
     MonitoringTube,
+    TimeValuePair,
     UploadTask,
     UploadTaskMetadata,
 )
@@ -177,7 +178,7 @@ def check_status(url: str, brostar_s: requests.Session) -> dict:
 
 def get_observations(
     bro_id: str, observation_status: Literal["volledigBeoordeeld", "voorlopig", None, "niet"]
-) -> pl.DataFrame:
+) -> pl.DataFrame | None:
     r = requests.get(
         f"https://publiek.broservices.nl/gm/gld/v1/objects/{bro_id}/observationsSummary"
     )
@@ -187,7 +188,6 @@ def get_observations(
         return None
 
     df = pl.DataFrame(results)
-    logger.info(df)
     if observation_status == "niet":
         return df
 
@@ -311,15 +311,47 @@ def retrieve_reset_events(timeserie_url: str):
         logger.info(f"Found and adjusted {events.height} events")
 
 
-def retrieve_and_adjust_events(timeserie_url: str, start_date: str, end_date: str):
+def retrieve_and_adjust_events(
+    timeserie_url: str, start_date: str, end_date: str, validation_code: str = "V"
+):
     events = get_timeserie_events(timeserie_url, start_date, end_date)
-    events = events.with_columns(pl.lit("V").alias("validation_code"))
+    events = events.with_columns(pl.lit(validation_code).alias("validation_code"))
     if events.is_empty():
         logger.info("No events found for timeframe")
     else:
         logger.info(events.head())
         post_timeseries(events, timeserie_url)
         logger.info(f"Found and adjusted {events.height} events")
+
+
+def mark_events_in_observation_periods(
+    events: pl.DataFrame, observations: pl.DataFrame
+) -> pl.DataFrame:
+    """
+    Mark events with validation_code='V' if they fall within any observation period.
+    Events are marked if: startDate <= event_time < endDate (endDate already has +1 day)
+    """
+    # Ensure validation_code column exists
+    if "validation_code" not in events.columns:
+        events = events.with_columns(pl.lit("").alias("validation_code"))
+
+    # Start with current validation codes
+    result = events.clone()
+
+    # For each observation period, mark events that fall within it
+    for obs in observations.iter_rows(named=True):
+        start = obs["startDate"]  # Already in YYYY-MM-DD format
+        end = obs["endDate"]  # Already in YYYY-MM-DD format with +1 day
+
+        # Mark events where startDate <= time < endDate with 'V'
+        result = result.with_columns(
+            pl.when((pl.col("time") >= start) & (pl.col("time") < end))
+            .then(pl.lit("V"))
+            .otherwise(pl.col("validation_code"))
+            .alias("validation_code")
+        )
+
+    return result
 
 
 def adjust_validation_code_lizard_based_on_bro(
@@ -357,42 +389,57 @@ def adjust_validation_code_lizard_based_on_bro(
         )
         if bro_id_imbro not in ["", None]:
             observations_df_imbro = get_observations(bro_id_imbro, observation_status)
-            logger.info(observations_df_imbro)
-        else:
-            observations_df_imbro = None
+            logger.info(f"Found observations_df_imbro: {observations_df_imbro}")
+            observations_df = observations_df_imbro
 
         if bro_id_imbroa not in ["", None]:
             observations_df_imbroa = get_observations(bro_id_imbroa, observation_status)
-            logger.info(observations_df_imbroa)
-        else:
-            observations_df_imbroa = None
+            logger.info(f"Found observations_df_imbroa: {observations_df_imbroa}")
+            if observations_df is None or observations_df.is_empty():
+                observations_df = observations_df_imbroa
+            elif observations_df_imbroa is not None and not observations_df_imbroa.is_empty():
+                observations_df = pl.concat([observations_df, observations_df_imbroa])
+
+        # If no observations, nothing to do
+        if observations_df is None or observations_df.is_empty():
+            logger.info(f"No observations found for location: {location['code']}")
+            return
+
+        # Convert dates: DD-MM-YYYY -> YYYY-MM-DD and add 1 day to endDate
+        observations_df = observations_df.with_columns(
+            [
+                pl.col("startDate")
+                .str.to_date("%d-%m-%Y")
+                .dt.strftime("%Y-%m-%d")
+                .alias("startDate"),
+                pl.col("endDate")
+                .str.to_date("%d-%m-%Y")
+                .dt.offset_by("1d")
+                .dt.strftime("%Y-%m-%d")
+                .alias("endDate"),
+            ]
+        )
+
+        # Get the overall date range
+        min_start = observations_df["startDate"].min()
+        max_end = observations_df["endDate"].max()
 
         timeseries = get_timeseries(location, observation_code=observation_code)
         for timeserie in timeseries:
-            if observations_df_imbro is not None or observations_df_imbroa is not None:
-                retrieve_reset_events(
-                    timeserie["url"],
-                )
+            # Get ALL events in the date range with ONE request
+            all_events = get_timeserie_events(timeserie["url"], min_start, max_end)
 
-            if observations_df_imbro is not None:
-                for observation in observations_df_imbro.iter_rows(named=True):
-                    logger.info(observation)
-                    observation = convert_dates(observation)
-                    retrieve_and_adjust_events(
-                        timeserie["url"],
-                        observation["startDate"],
-                        observation["endDate"],
-                    )
+            if all_events.is_empty():
+                logger.info(f"No events found for timeserie in date range {min_start} to {max_end}")
+                continue
 
-            if observations_df_imbroa is not None:
-                for observation in observations_df_imbroa.iter_rows(named=True):
-                    logger.info(observation)
-                    observation = convert_dates(observation)
-                    retrieve_and_adjust_events(
-                        timeserie["url"],
-                        observation["startDate"],
-                        observation["endDate"],
-                    )
+            # Mark events as 'V' if they fall within any observation period
+            all_events = mark_events_in_observation_periods(all_events, observations_df)
+
+            # Post ALL updated events in ONE request
+            if not all_events.is_empty():
+                post_timeseries(all_events, timeserie["url"])
+                logger.info(f"Posted {len(all_events)} events for timeserie")
 
 
 def map_polars_to_gmw_constructions(df: pl.DataFrame, kvk: str) -> GMWConstruction:
@@ -416,12 +463,10 @@ def map_polars_to_gmw_constructions(df: pl.DataFrame, kvk: str) -> GMWConstructi
     x_coord = first_row.get("X-coordinaat(RD)", "")
     y_coord = first_row.get("Y-coordinaat(RD)", "")
     delivered_location = f"{x_coord} {y_coord}" if x_coord and y_coord else ""
-
     # Create GMWConstruction
     construction = GMWConstruction(
         # Required fields
         object_id_accountable_party=putnaam,  # Using Putnaam as specified
-        nitg_code=str(putnaam)[:-1],
         delivery_context=first_row.get("Kader aanlevering", ""),
         construction_standard=first_row.get("Kwaliteitsnorminrichting", ""),
         initial_function=first_row.get("Initiële functie", ""),
@@ -433,12 +478,12 @@ def map_polars_to_gmw_constructions(df: pl.DataFrame, kvk: str) -> GMWConstructi
         well_head_protector=first_row.get("Beschermconstructie", ""),
         well_construction_date=format_date(first_row.get("Inrichtingsdatum")),
         delivered_location=delivered_location,
-        horizontal_positioning_method=first_row.get("Method Coordinatenbepaling", ""),
+        horizontal_positioning_method=first_row.get("Methode Coordinatenbepaling", ""),
         local_vertical_reference_point="NAP",  # Always NAP as specified
         offset=0.0,  # No mapping available - needs default
         vertical_datum="NAP",  # Always NAP as specified
         ground_level_position=first_row.get("Maaiveldpositie (m+NAP)"),
-        ground_level_positioning_method=first_row.get("Method Maaiveldpositiebepaling", ""),
+        ground_level_positioning_method=first_row.get("Methode Maaiveldpositiebepaling", ""),
         monitoring_tubes=monitoring_tubes,
     )
 
@@ -455,7 +500,7 @@ def create_monitoring_tube(row: dict, tube_number: int) -> MonitoringTube:
         sediment_sump_present=row.get("Voorzien van zandvang", ""),
         number_of_geo_ohm_cables=0,  # No data available
         tube_top_diameter=row.get("Diameter bovenkantbuis (mm)"),
-        variable_diameter=row.get("Variable diameter"),
+        variable_diameter=row.get("Variabele diameter"),
         tube_status=row.get("Buis status", ""),
         tube_top_position=row.get("Positie bovenkantbuis (m+NAP)", 0.0),
         tube_top_positioning_method=row.get("MethodePositiebepalingBovenkantbuis", ""),
@@ -599,6 +644,7 @@ def bulk_gmw_construction_request(excel_file: str | Path, kvk: str) -> None:
         payload = payload.model_dump(mode="json", by_alias=True)
         logger.info(payload)
         r = brostar.post_upload(payload=payload, is_json=True)
+        logger.info(r.json())
         r.raise_for_status()
 
         uuid: str = r.json()["uuid"]
@@ -781,13 +827,27 @@ def get_pdok_attributes(bro_id: str, attributes: list[str]) -> dict[str, str]:
     return {attr: attributes_data.get(attr) for attr in attributes}
 
 
+def get_gmw_id_tube_nr(gld_id: str, brostar: BROSTARConnection):
+    r = brostar.get("gld/glds", params={"bro_id": gld_id})
+    r.raise_for_status()
+    results = r.json().get("results", [])
+    if len(results) == 0:
+        logger.warning(f"No GLD found for GLD ID {gld_id}.")
+        return None, None
+
+    gmw_bro_id = results[0].get("gmw_bro_id", None)
+    tube_number = results[0].get("tube_number", 1)
+    return gmw_bro_id, tube_number
+
+
 class GLDCorrecter:
     def __init__(self, bro_id: str | None = None) -> None:
         brostar_api_key = os.getenv("BROSTAR_API_KEY")
         brostar = BROSTARConnection(brostar_api_key)  # BROSTAR API Key
         brostar.set_website(production=True)
         self.brostar = brostar
-        self.set_bro_id(bro_id)
+        if bro_id is not None:
+            self.set_bro_id(bro_id)
 
     def set_bro_id(self, bro_id: str) -> None:
         if not is_gld_id(bro_id):
@@ -800,6 +860,86 @@ class GLDCorrecter:
 
     def set_project_number(self, project_number: str) -> None:
         self.project_number = project_number
+
+    def delete_observation(self, observation_id: str) -> None:
+        if self.bro_id is None:
+            raise ValueError("BRO ID is not set.")
+
+        r = requests.get(
+            f"https://publiek.broservices.nl/gm/gld/v1/objects/{self.bro_id}/observationsSummary",
+            timeout=30,
+        )
+        observations = pl.DataFrame(r.json())
+        observation = observations.filter(pl.col("observationId") == observation_id)
+
+        if len(observation) == 0:
+            logger.info(f"No observation found for {self.bro_id} with ID {observation_id}.")
+            return
+
+        row = observation.row(0, named=True)
+        logger.info(
+            f"Deleting observation {row['observationId']} - {row['startDate']} - {row['endDate']}"
+        )
+
+        row["endDate"] = datetime.strptime(row["endDate"], "%d-%m-%Y").date().isoformat()
+        row["startDate"] = (
+            (datetime.strptime(row["startDate"], "%d-%m-%Y") + timedelta(1)).date().isoformat()
+        )
+
+        source_doc_data = DeleteGLDAddition(
+            observation_id=row["observationId"],
+            observation_process_id=row["observationProcessId"],
+            observation_status=row["observationStatus"],
+            begin_position=row["startDate"],
+            end_position=row["endDate"],
+            observation_type=row["observationType"],
+            time_value_pairs=[
+                TimeValuePair(time="1900-01-01T00:00:00Z", value=0)
+            ],  # Empty time value pairs for deletion
+        )
+        source_doc_data.result_time = datetime.now(tz=AMS_TZ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        source_doc_data.date = datetime.now(tz=AMS_TZ).strftime("%Y-%m-%d")
+
+        payload = UploadTask(
+            bro_domain="GLD",
+            project_number=self.project_number,
+            registration_type="GLD_Addition",
+            request_type="delete",
+            metadata=UploadTaskMetadata(
+                request_reference=f"Delete_{self.bro_id}_{row['observationId']}_{datetime.now(tz=AMS_TZ).strftime('%Y-%m-%dT%H:%M:%SZ')}",
+                delivery_accountable_party=self.delivery_accountable_party,  # Adjust as needed
+                quality_regime=self.quality_regime,
+                bro_id=self.bro_id,
+                correction_reason="eigenCorrectie",
+            ),
+            sourcedocument_data=source_doc_data,
+        )
+
+        r = self.brostar.post_upload(
+            payload=payload.model_dump(mode="json", by_alias=True), is_json=True
+        )
+        r.raise_for_status()
+
+        uuid: str = r.json()["uuid"]
+        self.brostar.await_completed(uuid=uuid)
+        logger.info(
+            f"Should correct gld: {self.bro_id} from start {row['startDate']} to end {row['endDate']}"
+        )
+        # Adjust lizard events
+
+        gmw_id, tube_number = get_gmw_id_tube_nr(self.bro_id, self.brostar)
+        location_code = f"{gmw_id}-{int(tube_number):03d}"
+        ls = setup_lizard_session()
+        r = ls.get(
+            url=f"https://vitens.lizard.net/api/v4/timeseries/?location__code={location_code}&observation_type__code=WNS9040.hand"
+        )
+        timeserie_url = r.json()["results"][0]["url"]
+        retrieve_and_adjust_events(
+            timeserie_url=timeserie_url,
+            start_date=row["startDate"],
+            end_date=row["endDate"],
+            validation_code="",
+        )
 
     def delete_observations(
         self, start_date: datetime | None = None, lower_then: bool = False
@@ -821,7 +961,7 @@ class GLDCorrecter:
             pl.col("endDate").str.strptime(pl.Datetime, format="%d-%m-%Y").alias("endDate"),
         )
         if start_date is not None and lower_then:
-            observations = observations.filter(pl.col("startDate") <= start_date)
+            observations = observations.filter(pl.col("startDate") < start_date)
         elif start_date is not None and not lower_then:
             observations = observations.filter(pl.col("startDate") >= start_date)
 
@@ -844,7 +984,7 @@ class GLDCorrecter:
                 end_position=row["endDate"],
                 observation_type=row["observationType"],
                 time_value_pairs=[
-                    {"time": "1900-01-01T00:00:00Z", "value": 0}
+                    TimeValuePair(time="1900-01-01T00:00:00Z", value=0)
                 ],  # Empty time value pairs for deletion
             )
             source_doc_data.result_time = datetime.now(tz=AMS_TZ).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -977,8 +1117,18 @@ def check_status_processing_upload_tasks() -> None:
     brostar_api_key = os.getenv("BROSTAR_API_KEY")
     brostar = BROSTARConnection(brostar_api_key)  # BROSTAR API Key
     brostar.set_website(production=True)
-    r = brostar.get("uploadtasks", params={"status": "UNFINISHED"})
+    # https://www.brostar.nl/api/uploadtasks/?created__lte=2025-07-01&status=COMPLETED&registration_type=GLD_Addition
+    r = brostar.get(
+        "uploadtasks",
+        params={
+            "status": "COMPLETED",
+            "created__lte": "2025-07-01",
+            "registration_type": "GLD_Addition",
+            "request_type": "registration",
+        },
+    )
     next = r.url
+    info = []
     while next is not None:
         r = brostar.s.get(next)
         print(r.url)
@@ -986,12 +1136,84 @@ def check_status_processing_upload_tasks() -> None:
         r.raise_for_status()
         tasks = r.json()["results"]
         for task in tasks:
+            if (
+                task["sourcedocument_data"].get("observationType", "reguliereMeting")
+                == "controlemeting"
+            ):
+                continue
+
+            if task["sourcedocument_data"].get("timeValuePairsCount", 0) < 10:
+                continue
+
+            info.append(
+                {
+                    "broId": task["bro_id"],
+                    "observationId": task["sourcedocument_data"].get("observationId", ""),
+                    "tvpCount": task["sourcedocument_data"].get("timeValuePairsCount", 0),
+                }
+            )
             # res = brostar.s.patch(task["url"], json={"status": "PENDING"}, timeout=30)
-            res = brostar.s.post(task["url"] + "check_status/", json={}, timeout=30)
-            print(res.url)
-            print(res.status_code, res.content)
+            # res = brostar.s.post(task["url"] + "check_status/", json={}, timeout=30)
+            # print(res.url)
+            # print(res.status_code, res.content)
 
         next = r.json().get("next")
+
+    df = pl.DataFrame(info)
+    df.write_csv("20251215_Rotterdam.csv")
+
+
+def download_xml_upload_tasks() -> None:
+    """Download all upload tasks"""
+    brostar_api_key = os.getenv("BROSTAR_API_KEY")
+    brostar = BROSTARConnection(brostar_api_key)  # BROSTAR API Key
+    brostar.set_website(production=True)
+
+    pairs = [
+        ("GLD000000098258", "GLD000000038928"),
+        ("GLD000000098287", "GLD000000038965"),
+        ("GLD000000098259", "GLD000000038959"),
+        ("GLD000000098260", "GLD000000038967"),
+        ("GLD000000098288", "GLD000000038947"),
+        ("GLD000000098289", "GLD000000038939"),
+        ("GLD000000098290", "GLD000000038929"),
+        ("GLD000000098291", "GLD000000038928"),
+        ("GLD000000098292", "GLD000000038963"),
+        ("GLD000000098261", "GLD000000038932"),
+        ("GLD000000098293", "GLD000000038953"),
+        ("GLD000000098294", "GLD000000038968"),
+        ("GLD000000098265", "GLD000000038945"),
+        ("GLD000000098297", "GLD000000038962"),
+        ("GLD000000098326", "GLD000000038960"),
+        ("GLD000000098302", "GLD000000038941"),
+        ("GLD000000098328", "GLD000000038934"),
+        ("GLD000000098330", "GLD000000038946"),
+        ("GLD000000098303", "GLD000000038951"),
+        ("GLD000000098304", "GLD000000038944"),
+    ]
+    for current_id, new_id in pairs:
+        r = brostar.get(
+            "uploadtasks",
+            params={
+                "status": "COMPLETED",
+                "bro_id": current_id,
+                "registration_type": "GLD_Addition",
+            },
+        )
+        r.raise_for_status()
+        tasks = r.json()["results"]
+        for task in tasks:
+            logger.info(task["sourcedocument_data"])
+            if task["sourcedocument_data"]["observationType"] == "controlemeting":
+                metadata = task["metadata"]
+                metadata["broId"] = new_id
+                r = brostar.s.patch(task["url"], json={"metadata": metadata})
+                logger.info(r.status_code)
+
+                r = brostar.s.get(task["bro_delivery_url"] + "read_xml/", timeout=30)
+                # returns full xml content, should save this to file.
+                with open(f"{current_id}_to_{new_id}.xml", "wb") as f:
+                    f.write(r.content)
 
 
 def fix_upload_tasks() -> None:
@@ -1159,9 +1381,9 @@ def process_result(result: dict) -> None:
     }
 
     r = lizard_s.get(
-        url="https://rotterdam.lizard.net/api/v4/locations/",
+        url="https://vitens.lizard.net/api/v4/locations/",
         params={
-            "code": f"{result['sourcedocument_data']['gmwBroId']}-{result['sourcedocument_data']['tubeNumber']:03d}"
+            "code": f"{result['sourcedocument_data']['objectIdAccountableParty']}",
         },
         timeout=15,
     )
@@ -1175,10 +1397,10 @@ def process_result(result: dict) -> None:
     logger.info(f"BRO-ID: {result['bro_id']}")
 
     if result["metadata"]["qualityRegime"] == "IMBRO":
-        extra_metadata["bro"]["gldIdImbro"] = result["bro_id"]
+        extra_metadata["bro"]["broid_gld_imbro"] = result["bro_id"]
         logger.info(extra_metadata["bro"])
     else:
-        extra_metadata["bro"]["gldIdImbroA"] = result["bro_id"]
+        extra_metadata["bro"]["broid_gld_imbroa"] = result["bro_id"]
         logger.info(extra_metadata["bro"])
 
     r = lizard_s.patch(
@@ -1236,8 +1458,14 @@ def ingest_gld_ids_into_lizard():
     brostar.set_website(production=True)
 
     r = brostar.get(
-        "uploadtasks", params={"registration_type": "GLD_StartRegistration", "status": "COMPLETED"}
+        "uploadtasks",
+        params={
+            "registration_type": "GLD_StartRegistration",
+            "status": "COMPLETED",
+            "project_number": "1366",
+        },
     )
+    print(r.json())
     while r.json()["next"] is not None:
         for result in r.json()["results"]:
             logger.info(f"Processing {result}")

@@ -3,7 +3,9 @@ import xml.etree.ElementTree as ET
 
 import requests
 
+from ..upload_models import Analysis, AnalysisProcess, LaboratoryAnalysis
 from .namespaces import (
+    ns_reg_gar,
     ns_reg_gld_tot,
     ns_reg_gmn_tot,
     ns_reg_gmw,
@@ -759,3 +761,296 @@ class GMNXML:
         for monitoring_point in monitoring_points:
             measuring_points.append(self._setup_measuring_point(monitoring_point))
         return measuring_points
+
+
+class GARXML:
+    def __init__(
+        self,
+        bro_id: str,
+        bro_url: str = "https://publiek.broservices.nl/",
+        full_history: bool = True,
+    ) -> None:
+        fh = "ja" if full_history else "nee"
+
+        if not isinstance(bro_id, str):
+            raise TypeError(f"Incorrect type: {type(bro_id)}.")
+
+        elif bro_id.startswith("GAR") and bro_id.split("GAR")[-1].isdigit() and len(bro_id) == 15:
+            self.xml_etree = _request_bro_xml(bro_id, f"fullHistory={fh}", "gar", bro_url)
+
+        else:
+            raise ValueError(f"Incorrect GAR-ID: {bro_id}")
+
+    # ------------------------
+    # Helper xml functions
+    # ------------------------
+
+    def _find(self, path: str):
+        """Return element or None."""
+        return self.xml_etree.find(path, ns_reg_gar)
+
+    def _findtext(self, path: str) -> str | None:
+        """Safe text extractor."""
+        el = self._find(path)
+        return el.text if el is not None else None
+
+    def _findall(self, path: str):
+        """Return a list of elements."""
+        return self.xml_etree.findall(path, ns_reg_gar)
+
+    # ------------------------
+    # Basic properties
+    # ------------------------
+
+    @property
+    def bro_id(self) -> str | None:
+        return self._findtext(".//brocom:broId")
+
+    @property
+    def delivery_accountable_party(self) -> str | None:
+        return self._findtext(".//brocom:deliveryAccountableParty")
+
+    @property
+    def quality_regime(self) -> str | None:
+        return self._findtext(".//brocom:qualityRegime")
+
+    # ------------------------
+    # Registration history
+    # ------------------------
+
+    @property
+    def registration_history(self) -> dict:
+        rh = self._find(".//registrationHistory")
+        if rh is None:
+            return {}
+
+        return {
+            "objectRegistrationTime": self._findtext(
+                ".//registrationHistory/brocom:objectRegistrationTime"
+            ),
+            "registrationStatus": self._findtext(
+                ".//registrationHistory/brocom:registrationStatus"
+            ),
+            "registrationCompletionTime": self._findtext(
+                ".//registrationHistory/brocom:registrationCompletionTime"
+            ),
+            "corrected": self._findtext(".//registrationHistory/brocom:corrected"),
+            "underReview": self._findtext(".//registrationHistory/brocom:underReview"),
+            "deregistered": self._findtext(".//registrationHistory/brocom:deregistered"),
+            "reregistered": self._findtext(".//registrationHistory/brocom:reregistered"),
+        }
+
+    # ------------------------
+    # Monitoring point (Tube)
+    # ------------------------
+
+    @property
+    def monitoring_point(self) -> dict | None:
+        tube = self._find(".//garcommon:GroundwaterMonitoringTube")
+        if tube is None:
+            return None
+
+        return {
+            "broId": self._findtext(".//garcommon:GroundwaterMonitoringTube/garcommon:broId"),
+            "tubeNumber": self._findtext(
+                ".//garcommon:GroundwaterMonitoringTube/garcommon:tubeNumber"
+            ),
+            "gml_id": tube.attrib.get("{http://www.opengis.net/gml/3.2}id"),
+        }
+
+    # ------------------------------------------------------
+    # Monitoring nets
+    # ------------------------------------------------------
+    @property
+    def monitoring_nets(self) -> list[dict]:
+        nets = []
+
+        for net in self._findall(".//garcommon:GroundwaterMonitoringNet"):
+            nets.append(
+                {
+                    "broId": net.find("garcommon:broId", ns_reg_gar).text,
+                    "gml_id": net.attrib.get("{http://www.opengis.net/gml/3.2}id"),
+                }
+            )
+
+        return nets
+
+    # ------------------------
+    # Field research section
+    # ------------------------
+    @property
+    def quality_control_method(self) -> str | None:
+        return self._findtext(".//qualityControlMethod")
+
+    @property
+    def sampling_datetime(self) -> str | None:
+        return self._findtext(".//fieldResearch/garcommon:samplingDateTime")
+
+    @property
+    def sampling_standard(self) -> str | None:
+        return self._findtext(".//fieldResearch/garcommon:samplingStandard")
+
+    @property
+    def pump_type(self) -> str | None:
+        return self._findtext(".//fieldResearch/garcommon:samplingDevice/garcommon:pumpType")
+
+    @property
+    def field_observations(self) -> dict:
+        obs_root = self._find(".//fieldResearch/garcommon:fieldObservation")
+        if obs_root is None:
+            return {}
+
+        return {child.tag.split("}", 1)[1]: child.text for child in obs_root}
+
+    @property
+    def field_measurements(self) -> list[dict]:
+        results = []
+
+        for fm in self._findall(".//fieldResearch/garcommon:fieldMeasurement"):
+            results.append(
+                {
+                    "parameter": fm.find("garcommon:parameter", ns_reg_gar).text,
+                    "fieldMeasurementValue": fm.find(
+                        "garcommon:fieldMeasurementValue", ns_reg_gar
+                    ).text,
+                    "unit": fm.find("garcommon:fieldMeasurementValue", ns_reg_gar).attrib.get(
+                        "uom"
+                    ),
+                    "qualityControlStatus": fm.find(
+                        "garcommon:qualityControlStatus", ns_reg_gar
+                    ).text,
+                }
+            )
+        return results
+
+    # ------------------------
+    # Laboratory analyses
+    # ------------------------
+
+    @property
+    def laboratory_analysis(self) -> list[LaboratoryAnalysis]:
+        labs: list[LaboratoryAnalysis] = []
+
+        for lab_el in self.xml_etree.findall(".//laboratoryAnalysis", ns_reg_gar):
+            # --------------------------
+            # Responsible laboratory
+            # --------------------------
+            kvk = lab_el.find(".//brocom:chamberOfCommerceNumber", ns_reg_gar)
+            euid = lab_el.find(".//brocom:europeanCompanyRegistrationNumber", ns_reg_gar)
+
+            responsible_kvk = kvk.text if kvk is not None else None
+            responsible_euid = euid.text if euid is not None else None
+
+            # --------------------------
+            # Parse analysis processes
+            # --------------------------
+            processes: list[AnalysisProcess] = []
+
+            for ap in lab_el.findall("garcommon:analysisProcess", ns_reg_gar):
+                # ---- Determine date type (4 possible)
+                date_el = ap.find("garcommon:analysisDate", ns_reg_gar)
+                date_value = None
+
+                if date_el is not None:
+                    for tag in [
+                        "brocom:date",
+                        "brocom:yearMonth",
+                        "brocom:year",
+                        "brocom:voidReason",
+                    ]:
+                        d = date_el.find(tag, ns_reg_gar)
+                        if d is not None:
+                            date_value = d.text
+                            break
+
+                # ---- Technique & valuation
+                technique_el = ap.find("garcommon:analyticalTechnique", ns_reg_gar)
+                valuation_el = ap.find("garcommon:valuationMethod", ns_reg_gar)
+
+                analytical_technique = technique_el.text if technique_el is not None else None
+                valuation_method = valuation_el.text if valuation_el is not None else None
+
+                # --------------------------
+                # Analyses list
+                # --------------------------
+                analyses: list[Analysis] = []
+
+                for ana in ap.findall("garcommon:analysis", ns_reg_gar):
+                    # Parameter
+                    p = ana.find("garcommon:parameter", ns_reg_gar)
+                    parameter_text = p.text if p is not None else None
+
+                    # Try convert to int
+                    try:
+                        parameter = int(parameter_text)
+                    except Exception:
+                        parameter = parameter_text
+
+                    # Value + unit
+                    amv = ana.find("garcommon:analysisMeasurementValue", ns_reg_gar)
+                    value = float(amv.text) if amv is not None else None
+                    unit = amv.attrib.get("uom") if amv is not None else None
+
+                    # Optional: limitSymbol
+                    ls = ana.find("garcommon:limitSymbol", ns_reg_gar)
+                    limit_symbol = ls.text if ls is not None else None
+
+                    # Optional: reportingLimit
+                    rl_el = ana.find("garcommon:reportingLimit", ns_reg_gar)
+                    if rl_el is not None:
+                        try:
+                            reporting_limit = float(rl_el.text)
+                        except Exception:
+                            reporting_limit = rl_el.text
+                    else:
+                        reporting_limit = None
+
+                    # QC status
+                    qc = ana.find("garcommon:qualityControlStatus", ns_reg_gar)
+                    qc_status = qc.text if qc is not None else None
+
+                    analyses.append(
+                        Analysis(
+                            parameter=parameter,
+                            unit=unit,
+                            analysis_measurement_value=value,
+                            limit_symbol=limit_symbol,
+                            reporting_limit=reporting_limit,
+                            quality_control_status=qc_status,
+                        )
+                    )
+
+                processes.append(
+                    AnalysisProcess(
+                        date=date_value,
+                        analytical_technique=analytical_technique,
+                        valuation_method=valuation_method,
+                        analyses=analyses,
+                    )
+                )
+
+            labs.append(
+                LaboratoryAnalysis(
+                    responsible_laboratory_kvk=responsible_kvk,
+                    responsible_laboratory_euid=responsible_euid,
+                    analysis_processes=processes,
+                )
+            )
+
+        return labs
+
+    # ------------------------
+    # Metadata
+    # ------------------------
+
+    @property
+    def dispatch_time(self) -> str | None:
+        return self._findtext(".//brocom:dispatchTime")
+
+    @property
+    def request_reference(self) -> str | None:
+        return self._findtext(".//brocom:requestReference")
+
+    @property
+    def response_type(self) -> str | None:
+        return self._findtext(".//brocom:responseType")

@@ -112,3 +112,26 @@ codespace_gld = {
     "StatusQualityControl": "urn:bro:gld:StatusQualityControl",
     "censoringLimitvalue": "urn:bro:gld:PointMetadata:censoringLimitvalue",
 }
+
+
+# =============================================================================
+# GAR
+# =============================================================================
+
+ns_reg_gar = {
+    "": "http://www.broservices.nl/xsd/dsgar/1.0",
+    "brocom": "http://www.broservices.nl/xsd/brocommon/3.0",
+    "garcommon": "http://www.broservices.nl/xsd/garcommon/1.0",
+    "gml": "http://www.opengis.net/gml/3.2",
+    "xlink": "http://www.w3.org/1999/xlink",
+}
+
+codespace_gar = {
+    "QualityControlMethod": "urn:bro:gar:QualityControlMethod",
+    "SamplingStandard": "urn:bro:gar:SamplingStandard",
+    "PumpType": "urn:bro:gar:PumpType",
+    "QualityControlStatus": "urn:bro:gar:QualityControlStatus",
+    "AnalyticalTechnique": "urn:bro:gar:AnalyticalTechnique",
+    "ValuationMethod": "urn:bro:gar:ValuationMethod",
+    "LimitSymbol": "urn:bro:gar:LimitSymbol",
+}
